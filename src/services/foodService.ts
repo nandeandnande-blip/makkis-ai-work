@@ -19,10 +19,16 @@ const FOOD_USAGE_KEY = 'cct_food_usage';
 interface FoodUsage {
   lastUsedAt: number;
   useCount: number;
+  lastWeight?: number;
 }
 
 function getFoodUsageMap(): Record<string, FoodUsage> {
   return getItem<Record<string, FoodUsage>>(FOOD_USAGE_KEY, {});
+}
+
+/** 获取某食物上次使用的重量，无记录返回 null */
+export function getLastUsedWeight(foodId: string): number | null {
+  return getFoodUsageMap()[foodId]?.lastWeight ?? null;
 }
 
 function saveFoodUsageMap(map: Record<string, FoodUsage>): void {
@@ -78,12 +84,13 @@ export function getFrequentFoods(userId: string, limit = 5): Food[] {
 }
 
 /** 记录食物使用 */
-export function recordFoodUsage(foodId: string): void {
+export function recordFoodUsage(foodId: string, weight?: number): void {
   const map = getFoodUsageMap();
   const existing = map[foodId] ?? { lastUsedAt: 0, useCount: 0 };
   map[foodId] = {
     lastUsedAt: Date.now(),
     useCount: existing.useCount + 1,
+    lastWeight: weight ?? existing.lastWeight,
   };
   saveFoodUsageMap(map);
 }

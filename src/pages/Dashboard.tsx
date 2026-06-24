@@ -4,16 +4,17 @@ import {
   Activity,
   ChevronRight,
   Flame,
-  Plus,
   Scale,
+  Trash2,
   Utensils,
 } from 'lucide-react';
 import { CycleTarget, CycleType, DailyRecord, MealType, UserProfile, WeightRecord } from '../types';
 import { CYCLE_STRATEGY, MEAL_CONFIG } from '../utils/constants';
 import { calculateCycleTargets, getCycleTypeForDate, sumMacros } from '../utils/calculator';
 import { useAuth } from '../contexts/AuthContext';
-import { getDailyRecord } from '../services/dailyRecordService';
+import { getDailyRecord, removeFoodFromMeal } from '../services/dailyRecordService';
 import { getFoodById } from '../services/foodService';
+import { updateCurrentWeightAndRecalcTargets } from '../services/authService';
 import {
   getWeightRecordByDate,
   getLatestWeightRecord,
@@ -138,42 +139,16 @@ function DietFoodImage({ src, name }: { src?: string; name: string }) {
   );
 }
 
-function MealQuickAdd({
-  mealType,
-  intake,
-  onAdd,
-}: {
-  mealType: MealType;
-  intake: CycleTarget;
-  onAdd: () => void;
-}) {
-  return (
-    <button
-      onClick={onAdd}
-      className="flex w-full items-center justify-between rounded-xl border border-slate-100 bg-white p-4 text-left shadow-sm transition hover:bg-slate-50"
-    >
-      <div>
-        <p className="font-medium text-slate-800">{MEAL_CONFIG[mealType].label}</p>
-        <p className="text-xs text-slate-500">
-          {Math.round(intake.calories)} kcal · 蛋白质 {Math.round(intake.protein)}g · 碳水 {Math.round(intake.carbs)}g · 脂肪 {Math.round(intake.fat)}g
-        </p>
-      </div>
-      <div className="rounded-full bg-emerald-50 p-2 text-emerald-600">
-        <Plus size={18} />
-      </div>
-    </button>
-  );
-}
-
 // ==================== Dashboard 页面 ====================
 
 export default function Dashboard() {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const { user, profile: realProfile, plan: realPlan, logout } = useAuth();
+  const { user, profile: realProfile, plan: realPlan, logout, refreshProfile } = useAuth();
   const [weightInput, setWeightInput] = useState('');
   const [weightNote, setWeightNote] = useState('');
   const [weightRefreshKey, setWeightRefreshKey] = useState(0);
+  const [dailyRecordRefreshKey, setDailyRecordRefreshKey] = useState(0);
 
   // 支持通过 URL ?date= 切换日期，默认今天
   const selectedDate = useMemo(
@@ -191,9 +166,26 @@ export default function Dashboard() {
   const strategy = CYCLE_STRATEGY[cycleType];
   const target = realPlan ? realPlan.targets[cycleType] : calcResult.cycleTargets[cycleType];
 
-  // 读取真实饮食记录
-  const realDailyRecord = user ? getDailyRecord(user.id, selectedDate) : null;
-  const dailyRecord = realDailyRecord ?? (isToday ? mockTodayRecord : { ...mockTodayRecord, date: selectedDate, meals: [] });
+  // 读取真实饮食记录；已登录用户没有记录时显示空记录，未登录时回退到 Mock
+  const dailyRecord = useMemo(() => {
+    const realDailyRecord = user ? getDailyRecord(user.id, selectedDate) : null;
+    const emptyDailyRecord: DailyRecord = {
+      id: 'empty',
+      userId: user?.id ?? '',
+      date: selectedDate,
+      cycleType,
+      meals: [],
+    };
+    return realDailyRecord ?? (user ? emptyDailyRecord : isToday ? mockTodayRecord : emptyDailyRecord);
+  }, [user, selectedDate, cycleType, isToday, dailyRecordRefreshKey]);
+
+  const handleDeleteMealFood = (mealType: MealType, mealFoodId: string) => {
+    if (!user) return;
+    if (confirm('确定删除该食物记录？')) {
+      removeFoodFromMeal(user.id, selectedDate, mealType, mealFoodId);
+      setDailyRecordRefreshKey((k) => k + 1);
+    }
+  };
 
   const allMealFoods = dailyRecord.meals.flatMap((m) => m.foods);
   const intake = useMemo(() => sumMacros(allMealFoods), [allMealFoods]);
@@ -218,6 +210,11 @@ export default function Dashboard() {
     if (weightInput && user) {
       const weight = Number(weightInput);
       saveWeightRecord(user.id, selectedDate, { weight, note: weightNote || undefined });
+      // 记录今日体重时，同步更新档案当前体重并重新计算摄入目标
+      if (selectedDate === new Date().toISOString().slice(0, 10)) {
+        updateCurrentWeightAndRecalcTargets(user.id, weight);
+        refreshProfile();
+      }
       setWeightInput('');
       setWeightNote('');
       setWeightRefreshKey((k) => k + 1);
@@ -372,29 +369,7 @@ export default function Dashboard() {
           </div>
         </section>
 
-        {/* 快速记录 */}
-        <section className="rounded-3xl bg-white p-6 shadow-sm">
-          <h2 className="mb-4 flex items-center gap-2 text-lg font-bold text-slate-800">
-            <Utensils size={20} className="text-emerald-500" />
-            快速记录
-          </h2>
-          <div className="space-y-3">
-            {(Object.keys(MEAL_CONFIG) as MealType[]).map((mealType) => {
-              const meal = dailyRecord.meals.find((m) => m.mealType === mealType);
-              const mealIntake = meal ? sumMacros(meal.foods) : { calories: 0, protein: 0, carbs: 0, fat: 0 };
-              return (
-                <MealQuickAdd
-                  key={mealType}
-                  mealType={mealType}
-                  intake={mealIntake}
-                  onAdd={() => navigateToDiet(mealType)}
-                />
-              );
-            })}
-          </div>
-        </section>
-
-        {/* 今日饮食记录流 */}
+        {/* 今日饮食记录 */}
         <section className="rounded-3xl bg-white p-6 shadow-sm">
           <h2 className="mb-4 flex items-center gap-2 text-lg font-bold text-slate-800">
             <Utensils size={20} className="text-emerald-500" />
@@ -404,38 +379,64 @@ export default function Dashboard() {
             {(Object.keys(MEAL_CONFIG) as MealType[]).map((mealType) => {
               const meal = dailyRecord.meals.find((m) => m.mealType === mealType);
               const mealFoods = meal?.foods ?? [];
+              const mealIntake = mealFoods.length > 0 ? sumMacros(mealFoods) : null;
               return (
-                <div key={mealType}>
-                  <div className="mb-2 flex items-center justify-between">
-                    <h3 className="font-medium text-slate-800">{MEAL_CONFIG[mealType].label}</h3>
-                    {mealFoods.length > 0 && (
-                      <span className="text-xs text-slate-500">
-                        {Math.round(sumMacros(mealFoods).calories)} kcal
-                      </span>
-                    )}
+                <div key={mealType} className="rounded-2xl border border-slate-100 p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <h3 className="font-bold text-slate-800">{MEAL_CONFIG[mealType].label}</h3>
+                    <button
+                      onClick={() => navigateToDiet(mealType)}
+                      className="flex items-center gap-1 rounded-lg bg-emerald-50 px-3 py-1.5 text-sm font-medium text-emerald-600 transition hover:bg-emerald-100"
+                    >
+                      <span className="text-lg leading-none">+</span>
+                      添加食物
+                    </button>
                   </div>
+
                   {mealFoods.length === 0 ? (
                     <p className="text-sm text-slate-400">暂无记录</p>
                   ) : (
-                    <div className="space-y-2">
-                      {mealFoods.map((mf) => {
-                        const food = user ? getFoodById(user.id, mf.foodId) : null;
-                        return (
-                          <div
-                            key={mf.id}
-                            className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 text-sm"
-                          >
-                            <div className="flex items-center gap-3">
-                              <DietFoodImage src={food?.image} name={food?.name ?? '未知'} />
-                              <span className="text-slate-700">{food?.name ?? '未知食物'}</span>
+                    <>
+                      <div className="space-y-2">
+                        {mealFoods.map((mf) => {
+                          const food = user ? getFoodById(user.id, mf.foodId) : null;
+                          return (
+                            <div
+                              key={mf.id}
+                              className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 text-sm"
+                            >
+                              <div className="flex items-center gap-3">
+                                <DietFoodImage src={food?.image} name={food?.name ?? '未知'} />
+                                <div>
+                                  <p className="font-medium text-slate-800">{food?.name ?? '未知食物'}</p>
+                                  <p className="text-xs text-slate-500">
+                                    蛋白质 {Math.round(mf.protein)}g · 碳水 {Math.round(mf.carbs)}g · 脂肪 {Math.round(mf.fat)}g
+                                  </p>
+                                </div>
+                              </div>
+                              <div className="flex items-center gap-3">
+                                <span className="text-slate-500">
+                                  {mf.weight}g · {Math.round(mf.calories)} kcal
+                                </span>
+                                <button
+                                  onClick={() => handleDeleteMealFood(mealType, mf.id)}
+                                  className="rounded-full p-1.5 text-rose-500 transition hover:bg-rose-50"
+                                  title="删除"
+                                >
+                                  <Trash2 size={16} />
+                                </button>
+                              </div>
                             </div>
-                            <span className="text-slate-500">
-                              {mf.weight}g · {Math.round(mf.calories)} kcal
-                            </span>
-                          </div>
-                        );
-                      })}
-                    </div>
+                          );
+                        })}
+                      </div>
+                      {mealIntake && (
+                        <div className="mt-3 rounded-xl bg-slate-50 px-4 py-2 text-xs text-slate-600">
+                          <span className="font-medium">{MEAL_CONFIG[mealType].label}合计：</span>
+                          {Math.round(mealIntake.calories)} kcal · 蛋白质 {Math.round(mealIntake.protein)}g · 碳水 {Math.round(mealIntake.carbs)}g · 脂肪 {Math.round(mealIntake.fat)}g
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               );

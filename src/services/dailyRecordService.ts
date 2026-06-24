@@ -105,7 +105,7 @@ export function addFoodToMeal(
 
   meal.foods.push(mealFood);
   saveRecords(records);
-  recordFoodUsage(food.id);
+  recordFoodUsage(food.id, weight);
   return record;
 }
 
