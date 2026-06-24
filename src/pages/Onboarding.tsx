@@ -40,6 +40,8 @@ export default function Onboarding() {
     targetWeight: 70,
     activityLevel: 'moderately_active',
   });
+  const [currentWeightRaw, setCurrentWeightRaw] = useState(String(form.currentWeight));
+  const [targetWeightRaw, setTargetWeightRaw] = useState(String(form.targetWeight));
   const [weekPlan, setWeekPlan] = useState<Record<DayKey, CycleType>>(DEFAULT_WEEK_PLAN);
   const [calcResult, setCalcResult] = useState<ReturnType<typeof calculateCycleTargets> | null>(null);
   const [error, setError] = useState('');
@@ -52,6 +54,29 @@ export default function Onboarding() {
 
   const handleChange = (field: keyof OnboardingInput, value: string | number) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleWeightChange = (
+    value: string,
+    setter: (val: string) => void,
+    field: 'currentWeight' | 'targetWeight'
+  ) => {
+    if (value === '' || /^\d+$/.test(value)) {
+      setter(value);
+      if (value !== '') {
+        handleChange(field, Number(value));
+      }
+    }
+  };
+
+  const handleWeightBlur = (
+    raw: string,
+    setter: (val: string) => void,
+    field: 'currentWeight' | 'targetWeight'
+  ) => {
+    if (raw === '') {
+      setter(String(form[field]));
+    }
   };
 
   const handleGenerate = (e: React.FormEvent) => {
@@ -288,8 +313,9 @@ export default function Onboarding() {
                 max={300}
                 required
                 inputMode="numeric"
-                value={form.currentWeight}
-                onChange={(e) => handleChange('currentWeight', Number(e.target.value))}
+                value={currentWeightRaw}
+                onChange={(e) => handleWeightChange(e.target.value, setCurrentWeightRaw, 'currentWeight')}
+                onBlur={() => handleWeightBlur(currentWeightRaw, setCurrentWeightRaw, 'currentWeight')}
                 className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-emerald-500"
               />
             </div>
@@ -302,8 +328,9 @@ export default function Onboarding() {
                 max={300}
                 required
                 inputMode="numeric"
-                value={form.targetWeight}
-                onChange={(e) => handleChange('targetWeight', Number(e.target.value))}
+                value={targetWeightRaw}
+                onChange={(e) => handleWeightChange(e.target.value, setTargetWeightRaw, 'targetWeight')}
+                onBlur={() => handleWeightBlur(targetWeightRaw, setTargetWeightRaw, 'targetWeight')}
                 className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-emerald-500"
               />
             </div>
