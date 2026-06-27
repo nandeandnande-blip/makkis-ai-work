@@ -1,13 +1,14 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useParams, useSearchParams, Link } from 'react-router-dom';
 import { ArrowLeft, Search, Plus, X, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { filterFoods, getRecentFoods, getFrequentFoods, getLastUsedWeight } from '../services/foodService';
 import { addFoodToMeal, getDailyRecord, removeFoodFromMeal } from '../services/dailyRecordService';
 import ConfirmDialog from '../components/ConfirmDialog';
+import FoodAvatar from '../components/FoodAvatar';
 import { getCycleTypeForDate } from '../utils/calculator';
-import { FOOD_CATEGORY_LABELS, FOOD_CATEGORY_COLORS, MEAL_CONFIG } from '../utils/constants';
-import { Food, FoodCategory, MealType, MealFood } from '../types';
+import { FOOD_CATEGORY_LABELS, MEAL_CONFIG } from '../utils/constants';
+import { DailyRecord, Food, FoodCategory, MealType, MealFood } from '../types';
 
 const CATEGORIES: (FoodCategory | 'all')[] = [
   'all',
@@ -20,39 +21,20 @@ const CATEGORIES: (FoodCategory | 'all')[] = [
   'other',
 ];
 
-function FoodImage({ src, name, category, className = '' }: { src?: string; name: string; category: FoodCategory; className?: string }) {
-  const initials = name.slice(0, 1);
-  if (src) {
-    return (
-      <img
-        src={src}
-        alt={name}
-        className={`rounded-xl object-cover ${className}`}
-        onError={(e) => {
-          (e.target as HTMLImageElement).style.display = 'none';
-        }}
-      />
-    );
-  }
-  return (
-    <div className={`flex items-center justify-center rounded-xl text-sm font-bold text-white ${FOOD_CATEGORY_COLORS[category].split(' ')[0]} ${className}`}>
-      {initials}
-    </div>
-  );
-}
-
 function FoodCard({
   food,
   onSelect,
   added,
+  disabled,
 }: {
   food: Food;
   onSelect: (food: Food) => void;
   added?: boolean;
+  disabled?: boolean;
 }) {
   return (
     <div className={`flex items-center gap-3 rounded-2xl bg-white p-3 shadow-sm transition ${added ? 'ring-2 ring-emerald-400' : ''}`}>
-      <FoodImage src={food.image} name={food.name} category={food.category} className="h-12 w-12" />
+      <FoodAvatar image={food.image} name={food.name} category={food.category} className="h-12 w-12" />
       <div className="min-w-0 flex-1">
         <p className="truncate font-medium text-slate-800">{food.name}</p>
         <p className="text-xs text-slate-500">
@@ -61,7 +43,8 @@ function FoodCard({
       </div>
       <button
         onClick={() => onSelect(food)}
-        className="rounded-full bg-emerald-50 p-2 text-emerald-600 transition hover:bg-emerald-100"
+        disabled={disabled}
+        className="rounded-full bg-emerald-50 p-2 text-emerald-600 transition hover:bg-emerald-100 disabled:bg-slate-100 disabled:text-slate-400"
       >
         <Plus size={18} />
       </button>
@@ -69,14 +52,14 @@ function FoodCard({
   );
 }
 
-function FoodSection({ title, foods, onSelect, highlightId }: { title: string; foods: Food[]; onSelect: (food: Food) => void; highlightId?: string }) {
+function FoodSection({ title, foods, onSelect, highlightId, selectDisabled }: { title: string; foods: Food[]; onSelect: (food: Food) => void; highlightId?: string; selectDisabled?: boolean }) {
   if (foods.length === 0) return null;
   return (
     <div className="mb-6">
       <h3 className="mb-3 text-sm font-medium text-slate-700">{title}</h3>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         {foods.map((food) => (
-          <FoodCard key={food.id} food={food} onSelect={onSelect} added={highlightId === food.id} />
+          <FoodCard key={food.id} food={food} onSelect={onSelect} added={highlightId === food.id} disabled={selectDisabled} />
         ))}
       </div>
     </div>
@@ -94,10 +77,17 @@ export default function DietRecord() {
   const [category, setCategory] = useState<FoodCategory | 'all'>('all');
   const [selectedFood, setSelectedFood] = useState<Food | null>(null);
   const [weight, setWeight] = useState('');
-  const [refreshKey, setRefreshKey] = useState(0);
   const [addedHighlightId, setAddedHighlightId] = useState<string | null>(null);
   const [showAdded, setShowAdded] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<MealFood | null>(null);
+  const [allFoods, setAllFoods] = useState<Food[]>([]);
+  const [recentFoods, setRecentFoods] = useState<Food[]>([]);
+  const [frequentFoods, setFrequentFoods] = useState<Food[]>([]);
+  const [foodsError, setFoodsError] = useState('');
+  const [currentMealFoods, setCurrentMealFoods] = useState<MealFood[]>([]);
+  const [recordError, setRecordError] = useState('');
+  const [isAdding, setIsAdding] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   if (!user || !date) {
     navigate('/', { replace: true });
@@ -107,18 +97,52 @@ export default function DietRecord() {
   const cycleType = plan ? getCycleTypeForDate(plan, date) : 'medium';
 
   // 当前餐次已添加的食物
-  const currentMealFoods = useMemo(() => {
-    const record = getDailyRecord(user.id, date);
-    const meal = record?.meals.find((m) => m.mealType === mealType);
-    return meal?.foods ?? [];
-  }, [user.id, date, mealType, refreshKey]);
+  useEffect(() => {
+    if (!user || !date) return;
+    let cancelled = false;
+    const loadMealFoods = async () => {
+      try {
+        setRecordError('');
+        const record = await getDailyRecord(user.id, date);
+        const meal = record?.meals.find((m) => m.mealType === mealType);
+        if (!cancelled) setCurrentMealFoods(meal?.foods ?? []);
+      } catch (err) {
+        console.error('[DietRecord] load meal foods error:', err);
+        if (!cancelled) setRecordError(err instanceof Error ? err.message : '加载失败');
+      }
+    };
+    loadMealFoods();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, date, mealType]);
 
-  const allFoods = useMemo(
-    () => filterFoods(user.id, { keyword, category }),
-    [user.id, keyword, category, refreshKey]
-  );
-  const recentFoods = useMemo(() => getRecentFoods(user.id, 10), [user.id, refreshKey]);
-  const frequentFoods = useMemo(() => getFrequentFoods(user.id, 5), [user.id, refreshKey]);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const loadFoods = async () => {
+      try {
+        setFoodsError('');
+        const [all, recent, frequent] = await Promise.all([
+          filterFoods(user.id, { keyword, category }),
+          getRecentFoods(user.id, 10),
+          getFrequentFoods(user.id, 5),
+        ]);
+        if (!cancelled) {
+          setAllFoods(all);
+          setRecentFoods(recent);
+          setFrequentFoods(frequent);
+        }
+      } catch (err) {
+        console.error('[DietRecord] load foods error:', err);
+        if (!cancelled) setFoodsError(err instanceof Error ? err.message : '加载失败');
+      }
+    };
+    loadFoods();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, keyword, category]);
 
   const calculated = useMemo(() => {
     if (!selectedFood || !weight) return null;
@@ -143,37 +167,69 @@ export default function DietRecord() {
     setWeight(String(getLastUsedWeight(food.id) ?? 100));
   };
 
-  const handleSave = () => {
-    if (!selectedFood || !calculated) return;
-
-    addFoodToMeal(user.id, date, mealType, {
-      food: selectedFood,
-      weight: Number(weight),
-    }, cycleType);
-
-    triggerAddFeedback(selectedFood.id);
-    setRefreshKey((k) => k + 1);
-    setSelectedFood(null);
-    setWeight('');
+  const updateCurrentMealFromRecord = (record: DailyRecord | null) => {
+    const meal = record?.meals.find((m) => m.mealType === mealType);
+    setCurrentMealFoods(meal?.foods ?? []);
   };
 
-  const handleQuickSave = (food: Food) => {
-    const weight = getLastUsedWeight(food.id) ?? 100;
-    addFoodToMeal(user.id, date, mealType, { food, weight }, cycleType);
-    triggerAddFeedback(food.id);
-    setRefreshKey((k) => k + 1);
-    setSelectedFood(null);
+  const handleSave = async () => {
+    if (!selectedFood || !calculated || isAdding) return;
+    setIsAdding(true);
+    setRecordError('');
+    try {
+      const record = await addFoodToMeal(user.id, date, mealType, {
+        food: selectedFood,
+        weight: Number(weight),
+      }, cycleType);
+
+      updateCurrentMealFromRecord(record);
+      triggerAddFeedback(selectedFood.id);
+      setSelectedFood(null);
+      setWeight('');
+    } catch (err) {
+      console.error('[DietRecord] save meal food error:', err);
+      setRecordError(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      setIsAdding(false);
+    }
+  };
+
+  const handleQuickSave = async (food: Food) => {
+    if (isAdding) return;
+    setIsAdding(true);
+    setRecordError('');
+    try {
+      const weight = getLastUsedWeight(food.id) ?? 100;
+      const record = await addFoodToMeal(user.id, date, mealType, { food, weight }, cycleType);
+      updateCurrentMealFromRecord(record);
+      triggerAddFeedback(food.id);
+      setSelectedFood(null);
+    } catch (err) {
+      console.error('[DietRecord] quick save meal food error:', err);
+      setRecordError(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      setIsAdding(false);
+    }
   };
 
   const handleDelete = (mf: MealFood) => {
     setDeleteTarget(mf);
   };
 
-  const handleConfirmDelete = () => {
-    if (!deleteTarget) return;
-    removeFoodFromMeal(user.id, date, mealType, deleteTarget.id);
-    setRefreshKey((k) => k + 1);
-    setDeleteTarget(null);
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget || isDeleting) return;
+    setIsDeleting(true);
+    setRecordError('');
+    try {
+      const record = await removeFoodFromMeal(user.id, date, mealType, deleteTarget.id);
+      updateCurrentMealFromRecord(record);
+    } catch (err) {
+      console.error('[DietRecord] delete meal food error:', err);
+      setRecordError(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      setIsDeleting(false);
+      setDeleteTarget(null);
+    }
   };
 
   return (
@@ -236,11 +292,13 @@ export default function DietRecord() {
       </header>
 
       <main className="mx-auto max-w-3xl px-4 pt-6">
+        {recordError && <p className="mb-4 text-sm text-rose-500">{recordError}</p>}
+        {foodsError && <p className="mb-4 text-sm text-rose-500">{foodsError}</p>}
         {/* 最近使用 / 常用 */}
         {keyword === '' && category === 'all' && (
           <>
-            <FoodSection title="最近使用" foods={recentFoods} onSelect={handleSelect} highlightId={addedHighlightId ?? undefined} />
-            <FoodSection title="常用食物" foods={frequentFoods} onSelect={handleSelect} highlightId={addedHighlightId ?? undefined} />
+            <FoodSection title="最近使用" foods={recentFoods} onSelect={handleSelect} highlightId={addedHighlightId ?? undefined} selectDisabled={isAdding} />
+            <FoodSection title="常用食物" foods={frequentFoods} onSelect={handleSelect} highlightId={addedHighlightId ?? undefined} selectDisabled={isAdding} />
           </>
         )}
 
@@ -251,7 +309,7 @@ export default function DietRecord() {
           </h3>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {allFoods.map((food) => (
-              <FoodCard key={food.id} food={food} onSelect={handleSelect} added={addedHighlightId === food.id} />
+              <FoodCard key={food.id} food={food} onSelect={handleSelect} added={addedHighlightId === food.id} disabled={isAdding} />
             ))}
           </div>
         </div>
@@ -282,7 +340,7 @@ export default function DietRecord() {
           <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-xl">
             <div className="mb-4 flex items-center justify-between">
               <div className="flex items-center gap-3">
-                <FoodImage src={selectedFood.image} name={selectedFood.name} category={selectedFood.category} className="h-12 w-12" />
+                <FoodAvatar image={selectedFood.image} name={selectedFood.name} category={selectedFood.category} className="h-12 w-12" />
                 <div>
                   <h3 className="font-bold text-slate-800">{selectedFood.name}</h3>
                   <p className="text-xs text-slate-500">{selectedFood.caloriesPer100g} kcal/100g</p>
@@ -332,16 +390,17 @@ export default function DietRecord() {
             <div className="mt-4 flex gap-3">
               <button
                 onClick={() => handleQuickSave(selectedFood)}
-                className="flex-1 rounded-xl border border-slate-200 bg-white py-3 font-medium text-slate-700 transition hover:bg-slate-50"
+                disabled={isAdding}
+                className="flex-1 rounded-xl border border-slate-200 bg-white py-3 font-medium text-slate-700 transition hover:bg-slate-50 disabled:bg-slate-100 disabled:text-slate-400"
               >
-                默认 100g
+                {isAdding ? '保存中...' : '默认 100g'}
               </button>
               <button
                 onClick={handleSave}
-                disabled={!calculated}
+                disabled={!calculated || isAdding}
                 className="flex-1 rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700 disabled:bg-slate-300"
               >
-                添加
+                {isAdding ? '保存中...' : '添加'}
               </button>
             </div>
           </div>
@@ -371,27 +430,30 @@ export default function DietRecord() {
               ) : (
                 <div className="space-y-3">
                   {currentMealFoods.map((mf) => {
-                    const food = allFoods.find((f) => f.id === mf.foodId);
+                    const foodById = mf.foodId ? allFoods.find((f) => f.id === mf.foodId) : undefined;
+                    const foodName = mf.foodName ?? foodById?.name ?? '未知食物';
+                    const food = foodById ?? allFoods.find((f) => f.name === foodName);
                     return (
                       <div
                         key={mf.id}
                         className="flex items-center gap-3 rounded-2xl bg-slate-50 p-3"
                       >
-                        <FoodImage
-                          src={food?.image}
-                          name={food?.name ?? '未知'}
+                        <FoodAvatar
+                          image={food?.image}
+                          name={foodName}
                           category={food?.category ?? 'other'}
                           className="h-12 w-12"
                         />
                         <div className="min-w-0 flex-1">
-                          <p className="font-medium text-slate-800">{food?.name ?? '未知食物'}</p>
+                          <p className="font-medium text-slate-800">{foodName}</p>
                           <p className="text-xs text-slate-500">
                             {mf.weight}g · {Math.round(mf.calories)} kcal · P{mf.protein} · C{mf.carbs} · F{mf.fat}
                           </p>
                         </div>
                         <button
                           onClick={() => handleDelete(mf)}
-                          className="rounded-full p-2 text-rose-500 transition hover:bg-rose-50"
+                          disabled={isDeleting}
+                          className="rounded-full p-2 text-rose-500 transition hover:bg-rose-50 disabled:text-rose-300"
                         >
                           <Trash2 size={18} />
                         </button>
@@ -411,6 +473,7 @@ export default function DietRecord() {
         message="确定删除这条记录吗？"
         confirmText="删除"
         variant="danger"
+        loading={isDeleting}
         onConfirm={handleConfirmDelete}
         onCancel={() => setDeleteTarget(null)}
       />

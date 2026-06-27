@@ -138,7 +138,9 @@ export interface Meal {
 export interface MealFood {
   id: string;
   mealId: string;
-  foodId: string;
+  foodId?: string;
+  /** 添加时保存的食物名称，用于展示（系统食物 food_id 可能为 null） */
+  foodName?: string;
   /** 摄入克数 */
   weight: number;
   /** 基于 weight 自动计算 */

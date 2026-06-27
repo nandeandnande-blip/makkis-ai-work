@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Activity,
@@ -8,13 +8,14 @@ import {
   Trash2,
   Utensils,
 } from 'lucide-react';
-import { CycleTarget, CycleType, DailyRecord, MealType, UserProfile, WeightRecord } from '../types';
+import { CycleTarget, CycleType, DailyRecord, Food, MealType, UserProfile, WeightRecord } from '../types';
 import { CYCLE_STRATEGY, MEAL_CONFIG } from '../utils/constants';
 import { calculateCycleTargets, getCycleTypeForDate, sumMacros } from '../utils/calculator';
 import { useAuth } from '../contexts/AuthContext';
 import { getDailyRecord, removeFoodFromMeal } from '../services/dailyRecordService';
-import { getFoodById } from '../services/foodService';
+import { getFoodMap } from '../services/foodService';
 import ConfirmDialog from '../components/ConfirmDialog';
+import FoodAvatar from '../components/FoodAvatar';
 import { updateCurrentWeightAndRecalcTargets } from '../services/authService';
 import {
   getWeightRecordByDate,
@@ -77,12 +78,7 @@ const mockTodayRecord: DailyRecord = {
   ],
 };
 
-const mockWeightRecords: WeightRecord[] = [
-  { id: 'w-1', userId: 'user-1', date: '2026-06-20', weight: 78.5, createdAt: '' },
-  { id: 'w-2', userId: 'user-1', date: '2026-06-21', weight: 78.2, createdAt: '' },
-  { id: 'w-3', userId: 'user-1', date: '2026-06-22', weight: 78.0, createdAt: '' },
-  { id: 'w-4', userId: 'user-1', date: '2026-06-23', weight: 77.8, createdAt: '' },
-];
+
 
 // ==================== 子组件 ====================
 
@@ -120,26 +116,6 @@ function MacroCard({
   );
 }
 
-function DietFoodImage({ src, name }: { src?: string; name: string }) {
-  if (src) {
-    return (
-      <img
-        src={src}
-        alt={name}
-        className="h-8 w-8 rounded-lg object-cover"
-        onError={(e) => {
-          (e.target as HTMLImageElement).style.display = 'none';
-        }}
-      />
-    );
-  }
-  return (
-    <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-slate-200 text-xs font-bold text-slate-500">
-      {name.slice(0, 1)}
-    </div>
-  );
-}
-
 // ==================== Dashboard 页面 ====================
 
 export default function Dashboard() {
@@ -148,9 +124,17 @@ export default function Dashboard() {
   const { user, profile: realProfile, plan: realPlan, logout, refreshProfile } = useAuth();
   const [weightInput, setWeightInput] = useState('');
   const [weightNote, setWeightNote] = useState('');
-  const [weightRefreshKey, setWeightRefreshKey] = useState(0);
-  const [dailyRecordRefreshKey, setDailyRecordRefreshKey] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<{ mealType: MealType; mealFoodId: string } | null>(null);
+  const [recentWeightRecords, setRecentWeightRecords] = useState<WeightRecord[]>([]);
+  const [displayWeight, setDisplayWeight] = useState(realProfile?.currentWeight ?? mockProfile.currentWeight);
+  const [weightDiff, setWeightDiff] = useState<number | null>(null);
+  const [weightError, setWeightError] = useState('');
+  const [foodMap, setFoodMap] = useState<{ byId: Record<string, Food>; byName: Record<string, Food> }>({
+    byId: {},
+    byName: {},
+  });
+  const [isDeletingMealFood, setIsDeletingMealFood] = useState(false);
+  const [isSavingWeight, setIsSavingWeight] = useState(false);
 
   // 支持通过 URL ?date= 切换日期，默认今天
   const selectedDate = useMemo(
@@ -166,31 +150,66 @@ export default function Dashboard() {
   const calcResult = useMemo(() => calculateCycleTargets(profile), [profile]);
   const cycleType = useMemo(() => getCycleTypeForDate(plan, selectedDate), [plan, selectedDate]);
   const strategy = CYCLE_STRATEGY[cycleType];
+
+  const [dailyRecord, setDailyRecord] = useState<DailyRecord>({
+    id: 'empty',
+    userId: '',
+    date: selectedDate,
+    cycleType,
+    meals: [],
+  });
   const target = realPlan ? realPlan.targets[cycleType] : calcResult.cycleTargets[cycleType];
 
   // 读取真实饮食记录；已登录用户没有记录时显示空记录，未登录时回退到 Mock
-  const dailyRecord = useMemo(() => {
-    const realDailyRecord = user ? getDailyRecord(user.id, selectedDate) : null;
-    const emptyDailyRecord: DailyRecord = {
-      id: 'empty',
-      userId: user?.id ?? '',
-      date: selectedDate,
-      cycleType,
-      meals: [],
+  useEffect(() => {
+    if (!user) {
+      setDailyRecord(isToday ? mockTodayRecord : { id: 'empty', userId: '', date: selectedDate, cycleType, meals: [] });
+      return;
+    }
+    let cancelled = false;
+    const loadDailyRecord = async () => {
+      try {
+        const record = await getDailyRecord(user.id, selectedDate);
+        if (!cancelled) {
+          setDailyRecord(
+            record ?? {
+              id: 'empty',
+              userId: user.id,
+              date: selectedDate,
+              cycleType,
+              meals: [],
+            }
+          );
+        }
+      } catch (err) {
+        console.error('[Dashboard] load daily record error:', err);
+      }
     };
-    return realDailyRecord ?? (user ? emptyDailyRecord : isToday ? mockTodayRecord : emptyDailyRecord);
-  }, [user, selectedDate, cycleType, isToday, dailyRecordRefreshKey]);
+    loadDailyRecord();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, selectedDate, cycleType, isToday]);
 
   const handleDeleteMealFood = (mealType: MealType, mealFoodId: string) => {
-    if (!user) return;
+    if (!user || isDeletingMealFood) return;
     setDeleteTarget({ mealType, mealFoodId });
   };
 
-  const handleConfirmDelete = () => {
-    if (!user || !deleteTarget) return;
-    removeFoodFromMeal(user.id, selectedDate, deleteTarget.mealType, deleteTarget.mealFoodId);
-    setDailyRecordRefreshKey((k) => k + 1);
-    setDeleteTarget(null);
+  const handleConfirmDelete = async () => {
+    if (!user || !deleteTarget || isDeletingMealFood) return;
+    setIsDeletingMealFood(true);
+    try {
+      const record = await removeFoodFromMeal(user.id, selectedDate, deleteTarget.mealType, deleteTarget.mealFoodId);
+      if (record) {
+        setDailyRecord(record);
+      }
+    } catch (err) {
+      console.error('[Dashboard] delete meal food error:', err);
+    } finally {
+      setIsDeletingMealFood(false);
+      setDeleteTarget(null);
+    }
   };
 
   const allMealFoods = dailyRecord.meals.flatMap((m) => m.foods);
@@ -202,28 +221,79 @@ export default function Dashboard() {
     fat: target.fat - intake.fat,
   };
 
-  // 体重数据
-  const { recentWeightRecords, displayWeight, weightDiff } = useMemo(() => {
-    const selected = user ? getWeightRecordByDate(user.id, selectedDate) : null;
-    const latest = user ? getLatestWeightRecord(user.id) : null;
-    const recent = user ? getRecentWeightRecords(user.id, 7) : mockWeightRecords;
-    const display = selected?.weight ?? latest?.weight ?? profile.currentWeight;
-    const diff = latest ? latest.weight - profile.targetWeight : null;
-    return { recentWeightRecords: recent, displayWeight: display, weightDiff: diff };
-  }, [user, selectedDate, profile.currentWeight, profile.targetWeight, weightRefreshKey]);
+  // 食物映射（用于展示已添加食物名称/图片）
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const loadFoodMap = async () => {
+      try {
+        const map = await getFoodMap(user.id);
+        if (!cancelled) setFoodMap(map);
+      } catch (err) {
+        console.error('[Dashboard] load food map error:', err);
+      }
+    };
+    loadFoodMap();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
-  const handleWeightSave = () => {
-    if (weightInput && user) {
+  // 体重数据
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const loadWeightData = async () => {
+      try {
+        setWeightError('');
+        const selected = await getWeightRecordByDate(user.id, selectedDate);
+        const latest = await getLatestWeightRecord(user.id);
+        const recent = await getRecentWeightRecords(user.id, 7);
+        const display = selected?.weight ?? latest?.weight ?? profile.currentWeight;
+        const diff = latest ? latest.weight - profile.targetWeight : null;
+        if (!cancelled) {
+          setRecentWeightRecords(recent);
+          setDisplayWeight(display);
+          setWeightDiff(diff);
+        }
+      } catch (err) {
+        console.error('[Dashboard] load weight data error:', err);
+      }
+    };
+    loadWeightData();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, selectedDate, profile.currentWeight, profile.targetWeight]);
+
+  const handleWeightSave = async () => {
+    if (!weightInput || !user || isSavingWeight) return;
+    setIsSavingWeight(true);
+    setWeightError('');
+    try {
       const weight = Number(weightInput);
-      saveWeightRecord(user.id, selectedDate, { weight, note: weightNote || undefined });
+      const saved = await saveWeightRecord(user.id, selectedDate, { weight, note: weightNote || undefined });
       // 记录今日体重时，同步更新档案当前体重并重新计算摄入目标
       if (selectedDate === new Date().toISOString().slice(0, 10)) {
-        updateCurrentWeightAndRecalcTargets(user.id, weight);
-        refreshProfile();
+        await updateCurrentWeightAndRecalcTargets(user.id, weight);
+        await refreshProfile();
       }
       setWeightInput('');
       setWeightNote('');
-      setWeightRefreshKey((k) => k + 1);
+      // 局部刷新体重展示，避免重新请求整页数据
+      setDisplayWeight(saved.weight);
+      setRecentWeightRecords((prev) => {
+        const next = prev.filter((r) => r.date !== saved.date);
+        next.push(saved);
+        next.sort((a, b) => a.date.localeCompare(b.date));
+        return next;
+      });
+      setWeightDiff(saved.weight - profile.targetWeight);
+    } catch (err) {
+      console.error('[Dashboard] save weight error:', err);
+      setWeightError('保存失败');
+    } finally {
+      setIsSavingWeight(false);
     }
   };
 
@@ -370,10 +440,12 @@ export default function Dashboard() {
             />
             <button
               onClick={handleWeightSave}
-              className="w-full rounded-xl bg-emerald-600 px-5 py-2 font-medium text-white transition hover:bg-emerald-700"
+              disabled={isSavingWeight}
+              className="w-full rounded-xl bg-emerald-600 px-5 py-2 font-medium text-white transition hover:bg-emerald-700 disabled:bg-emerald-400 disabled:opacity-70"
             >
-              记录体重
+              {isSavingWeight ? '保存中...' : '记录体重'}
             </button>
+            {weightError && <p className="text-sm text-rose-500">{weightError}</p>}
           </div>
         </section>
 
@@ -407,16 +479,23 @@ export default function Dashboard() {
                     <>
                       <div className="space-y-2">
                         {mealFoods.map((mf) => {
-                          const food = user ? getFoodById(user.id, mf.foodId) : null;
+                          const foodById = user && mf.foodId ? foodMap.byId[mf.foodId] : undefined;
+                          const foodName = mf.foodName ?? foodById?.name ?? '未知食物';
+                          const food = foodById ?? foodMap.byName[foodName];
                           return (
                             <div
                               key={mf.id}
                               className="flex items-center justify-between rounded-xl bg-slate-50 px-4 py-3 text-sm"
                             >
                               <div className="flex items-center gap-3">
-                                <DietFoodImage src={food?.image} name={food?.name ?? '未知'} />
+                                <FoodAvatar
+                                  image={food?.image}
+                                  name={foodName}
+                                  category={food?.category ?? 'other'}
+                                  className="h-10 w-10"
+                                />
                                 <div>
-                                  <p className="font-medium text-slate-800">{food?.name ?? '未知食物'}</p>
+                                  <p className="font-medium text-slate-800">{foodName}</p>
                                   <p className="text-xs text-slate-500">
                                     蛋白质 {Math.round(mf.protein)}g · 碳水 {Math.round(mf.carbs)}g · 脂肪 {Math.round(mf.fat)}g
                                   </p>
@@ -501,6 +580,7 @@ export default function Dashboard() {
         message="确定删除该食物记录？"
         confirmText="删除"
         variant="danger"
+        loading={isDeletingMealFood}
         onConfirm={handleConfirmDelete}
         onCancel={() => setDeleteTarget(null)}
       />

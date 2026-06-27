@@ -31,6 +31,7 @@ export default function NewFood() {
     fatPer100g: '',
   });
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!user) {
@@ -64,8 +65,10 @@ export default function NewFood() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     setError('');
 
     const calories = Number(form.caloriesPer100g);
@@ -82,17 +85,24 @@ export default function NewFood() {
       return;
     }
 
-    createCustomFood(user.id, {
-      name: form.name.trim(),
-      category: form.category,
-      image: form.image.trim() || undefined,
-      caloriesPer100g: calories,
-      proteinPer100g: protein,
-      carbsPer100g: carbs,
-      fatPer100g: fat,
-    });
+    try {
+      await createCustomFood(user.id, {
+        name: form.name.trim(),
+        category: form.category,
+        image: form.image.trim() || undefined,
+        caloriesPer100g: calories,
+        proteinPer100g: protein,
+        carbsPer100g: carbs,
+        fatPer100g: fat,
+      });
 
-    navigate(returnTo, { replace: true });
+      navigate(returnTo, { replace: true });
+    } catch (err) {
+      console.error('[NewFood] create food error:', err);
+      setError(err instanceof Error ? err.message : '保存失败');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -234,9 +244,10 @@ export default function NewFood() {
 
             <button
               type="submit"
-              className="w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700"
+              disabled={isSubmitting}
+              className="w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700 disabled:bg-emerald-400 disabled:opacity-70"
             >
-              保存食物
+              {isSubmitting ? '保存中...' : '保存食物'}
             </button>
           </form>
         </div>

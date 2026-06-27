@@ -8,6 +8,7 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // 已登录用户直接跳走
   if (user) {
@@ -17,12 +18,18 @@ export default function Login() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     setError('');
     try {
       await login(email, password);
       navigate('/', { replace: true });
     } catch (err) {
-      setError((err as Error).message);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[Login] 登录失败:', err);
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -62,9 +69,10 @@ export default function Login() {
 
           <button
             type="submit"
-            className="w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700"
+            disabled={isSubmitting}
+            className="w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700 disabled:bg-emerald-400 disabled:opacity-70"
           >
-            登录
+            {isSubmitting ? '登录中...' : '登录'}
           </button>
         </form>
 

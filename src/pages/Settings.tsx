@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { updateProfile } from '../services/authService';
 import { calculateCycleTargets } from '../utils/calculator';
-import { updatePlanTargets } from '../services/authService';
+import { updatePlanTargets } from '../services/planService';
 import { ACTIVITY_LABELS, GENDER_LABELS } from '../utils/constants';
 import { ActivityLevel, Gender } from '../types';
 
@@ -19,6 +19,7 @@ export default function Settings() {
     activityLevel: profile?.activityLevel ?? 'moderately_active',
   });
   const [saved, setSaved] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
 
   if (!user || !profile || !plan) {
     return (
@@ -33,22 +34,30 @@ export default function Settings() {
     setSaved(false);
   };
 
-  const handleSave = () => {
-    const updatedProfile = updateProfile(user.id, {
-      gender: form.gender as Gender,
-      age: Number(form.age),
-      height: Number(form.height),
-      currentWeight: Number(form.currentWeight),
-      targetWeight: Number(form.targetWeight),
-      activityLevel: form.activityLevel as ActivityLevel,
-    });
+  const handleSave = async () => {
+    if (isSaving) return;
+    setIsSaving(true);
+    try {
+      const updatedProfile = updateProfile(user.id, {
+        gender: form.gender as Gender,
+        age: Number(form.age),
+        height: Number(form.height),
+        currentWeight: Number(form.currentWeight),
+        targetWeight: Number(form.targetWeight),
+        activityLevel: form.activityLevel as ActivityLevel,
+      });
 
-    // 身体数据变化后重算碳循环目标
-    const calc = calculateCycleTargets(updatedProfile);
-    updatePlanTargets(user.id, calc.cycleTargets);
+      // 身体数据变化后重算碳循环目标
+      const calc = calculateCycleTargets(updatedProfile);
+      await updatePlanTargets(user.id, updatedProfile, calc.cycleTargets);
 
-    refreshProfile();
-    setSaved(true);
+      await refreshProfile();
+      setSaved(true);
+    } catch (err) {
+      console.error('[Settings] save error:', err);
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -167,9 +176,10 @@ export default function Settings() {
 
             <button
               onClick={handleSave}
-              className="w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700"
+              disabled={isSaving}
+              className="w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700 disabled:bg-emerald-400 disabled:opacity-70"
             >
-              保存设置
+              {isSaving ? '保存中...' : '保存设置'}
             </button>
 
             <button

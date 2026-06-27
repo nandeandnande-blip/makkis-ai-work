@@ -5,6 +5,7 @@ interface ConfirmDialogProps {
   confirmText?: string;
   cancelText?: string;
   variant?: 'danger' | 'primary';
+  loading?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
@@ -16,6 +17,7 @@ export default function ConfirmDialog({
   confirmText = '确定',
   cancelText = '取消',
   variant = 'primary',
+  loading = false,
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
@@ -29,19 +31,21 @@ export default function ConfirmDialog({
         <div className="flex gap-3">
           <button
             onClick={onCancel}
-            className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+            disabled={loading}
+            className="flex-1 rounded-xl border border-slate-200 bg-white py-2.5 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:opacity-50"
           >
             {cancelText}
           </button>
           <button
             onClick={onConfirm}
+            disabled={loading}
             className={`flex-1 rounded-xl py-2.5 text-sm font-medium text-white transition ${
               variant === 'danger'
-                ? 'bg-rose-500 hover:bg-rose-600'
-                : 'bg-emerald-600 hover:bg-emerald-700'
-            }`}
+                ? 'bg-rose-500 hover:bg-rose-600 disabled:bg-rose-400'
+                : 'bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-400'
+            } disabled:cursor-not-allowed disabled:opacity-70`}
           >
-            {confirmText}
+            {loading ? '处理中...' : confirmText}
           </button>
         </div>
       </div>

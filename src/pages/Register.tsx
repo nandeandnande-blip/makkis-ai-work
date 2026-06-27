@@ -9,6 +9,7 @@ export default function Register() {
   const [password, setPassword] = useState('');
   const [nickname, setNickname] = useState('');
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // 已登录用户直接跳走
   if (user) {
@@ -18,13 +19,19 @@ export default function Register() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     setError('');
     try {
       await register(email, password, nickname);
       // 注册成功后需要填写资料
       navigate('/onboarding', { replace: true });
     } catch (err) {
-      setError((err as Error).message);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error('[Register] 注册失败:', err);
+      setError(message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -76,9 +83,10 @@ export default function Register() {
 
           <button
             type="submit"
-            className="w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700"
+            disabled={isSubmitting}
+            className="w-full rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700 disabled:bg-emerald-400 disabled:opacity-70"
           >
-            注册
+            {isSubmitting ? '注册中...' : '注册'}
           </button>
         </form>
 

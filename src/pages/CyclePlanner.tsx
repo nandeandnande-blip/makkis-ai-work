@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { updatePlanDay, DayKey } from '../services/authService';
+import { updatePlanDay, DayKey } from '../services/planService';
 import { CYCLE_STRATEGY } from '../utils/constants';
 import { CycleType } from '../types';
 
@@ -46,11 +46,14 @@ const TEMPLATES: Record<string, Record<DayKey, CycleType>> = {
 };
 
 export default function CyclePlanner() {
-  const { user, plan, refreshProfile } = useAuth();
+  const { user, profile, plan, refreshProfile } = useAuth();
   const [refreshKey, setRefreshKey] = useState(0);
   const [expandedDay, setExpandedDay] = useState<DayKey | null>(null);
+  const [saveError, setSaveError] = useState('');
+  const [savingDay, setSavingDay] = useState<DayKey | null>(null);
+  const [savingTemplate, setSavingTemplate] = useState(false);
 
-  if (!user || !plan) {
+  if (!user || !profile || !plan) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-slate-50">
         <p className="text-slate-500">加载中...</p>
@@ -58,18 +61,40 @@ export default function CyclePlanner() {
     );
   }
 
-  const handleDayChange = (day: DayKey, type: CycleType) => {
-    updatePlanDay(user.id, day, type);
-    refreshProfile();
-    setRefreshKey((k) => k + 1);
+  const handleDayChange = async (day: DayKey, type: CycleType) => {
+    if (savingDay || savingTemplate) return;
+    setSavingDay(day);
+    setSaveError('');
+    try {
+      await updatePlanDay(user.id, profile, day, type);
+      await refreshProfile();
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      console.error('[CyclePlanner] handleDayChange error:', err);
+      setSaveError('保存失败');
+    } finally {
+      setSavingDay(null);
+    }
   };
 
-  const applyTemplate = (template: Record<DayKey, CycleType>) => {
-    (Object.keys(template) as DayKey[]).forEach((day) => {
-      updatePlanDay(user.id, day, template[day]);
-    });
-    refreshProfile();
-    setRefreshKey((k) => k + 1);
+  const applyTemplate = async (template: Record<DayKey, CycleType>) => {
+    if (savingTemplate || savingDay) return;
+    setSavingTemplate(true);
+    setSaveError('');
+    try {
+      await Promise.all(
+        (Object.keys(template) as DayKey[]).map((day) =>
+          updatePlanDay(user.id, profile, day, template[day])
+        )
+      );
+      await refreshProfile();
+      setRefreshKey((k) => k + 1);
+    } catch (err) {
+      console.error('[CyclePlanner] applyTemplate error:', err);
+      setSaveError('保存失败');
+    } finally {
+      setSavingTemplate(false);
+    }
   };
 
   const currentPlan = { ...plan };
@@ -84,6 +109,7 @@ export default function CyclePlanner() {
         <div className="mt-4 rounded-3xl bg-white p-8 shadow-sm">
           <h1 className="mb-2 text-2xl font-bold text-slate-800">碳循环计划</h1>
           <p className="mb-8 text-sm text-slate-500">点击每一天可展开查看推荐摄入，点击标签切换高/中/低碳日</p>
+          {saveError && <p className="mb-4 text-sm text-rose-500">{saveError}</p>}
 
           {/* 整周模板 */}
           <div className="mb-6 space-y-2">
@@ -91,21 +117,24 @@ export default function CyclePlanner() {
             <div className="grid grid-cols-3 gap-2">
               <button
                 onClick={() => applyTemplate(TEMPLATES.default)}
-                className="rounded-xl bg-slate-100 px-2 py-2 text-sm text-slate-700 transition hover:bg-slate-200"
+                disabled={savingTemplate}
+                className="rounded-xl bg-slate-100 px-2 py-2 text-sm text-slate-700 transition hover:bg-slate-200 disabled:opacity-50"
               >
-                默认模板
+                {savingTemplate ? '保存中...' : '默认模板'}
               </button>
               <button
                 onClick={() => applyTemplate(TEMPLATES.high_focus)}
-                className="rounded-xl bg-slate-100 px-2 py-2 text-sm text-slate-700 transition hover:bg-slate-200"
+                disabled={savingTemplate}
+                className="rounded-xl bg-slate-100 px-2 py-2 text-sm text-slate-700 transition hover:bg-slate-200 disabled:opacity-50"
               >
-                高碳侧重
+                {savingTemplate ? '保存中...' : '高碳侧重'}
               </button>
               <button
                 onClick={() => applyTemplate(TEMPLATES.low_focus)}
-                className="rounded-xl bg-slate-100 px-2 py-2 text-sm text-slate-700 transition hover:bg-slate-200"
+                disabled={savingTemplate}
+                className="rounded-xl bg-slate-100 px-2 py-2 text-sm text-slate-700 transition hover:bg-slate-200 disabled:opacity-50"
               >
-                低碳侧重
+                {savingTemplate ? '保存中...' : '低碳侧重'}
               </button>
             </div>
           </div>
@@ -169,13 +198,14 @@ export default function CyclePlanner() {
                               e.stopPropagation();
                               handleDayChange(key, type);
                             }}
-                            className={`flex-1 rounded-lg px-3 py-2 text-xs font-medium transition ${
+                            disabled={savingDay === key || savingTemplate}
+                            className={`flex-1 rounded-lg px-3 py-2 text-xs font-medium transition disabled:opacity-50 ${
                               currentType === type
                                 ? `${CYCLE_STRATEGY[type].color} text-white`
                                 : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
                             }`}
                           >
-                            {CYCLE_STRATEGY[type].label}
+                            {savingDay === key ? '保存中...' : CYCLE_STRATEGY[type].label}
                           </button>
                         ))}
                       </div>

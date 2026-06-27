@@ -1,7 +1,7 @@
 import { User, UserProfile, CyclePlan, CycleType } from '../types';
 import { getItem, setItem, STORAGE_KEYS } from './storage';
-import { calculateCycleTargets } from '../utils/calculator';
 import { supabase } from '../lib/supabase';
+import { createPlan, getPlan, DayKey } from './planService';
 
 function generateId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -9,18 +9,20 @@ function generateId(prefix: string): string {
 
 // ==================== Supabase Auth ====================
 
-export async function register(email: string, password: string, nickname: string): Promise<User> {
-  const { data, error } = await supabase.auth.signUp({ email, password });
-  if (error) {
-    throw new Error(error.message);
-  }
-  const authUser = data.user;
-  if (!authUser) {
-    throw new Error('注册失败，请重试');
-  }
+interface ProfileRow {
+  id: string;
+  nickname: string | null;
+  gender: string | null;
+  height: number | null;
+  current_weight: number | null;
+  target_weight: number | null;
+  activity_level: string | null;
+  updated_at: string | null;
+}
 
-  const { error: profileError } = await supabase.from('profiles').insert({
-    id: authUser.id,
+async function upsertProfile(userId: string, nickname: string): Promise<void> {
+  const row: ProfileRow = {
+    id: userId,
     nickname,
     gender: null,
     height: null,
@@ -28,9 +30,62 @@ export async function register(email: string, password: string, nickname: string
     target_weight: null,
     activity_level: null,
     updated_at: new Date().toISOString(),
+  };
+
+  const { error } = await supabase.from('profiles').upsert(row, { onConflict: 'id' });
+  if (error) {
+    console.error('[upsertProfile] 写入 profiles 失败:', error);
+    throw new Error(`写入用户资料失败：${error.message}`);
+  }
+}
+
+async function ensureProfile(userId: string, nickname: string): Promise<void> {
+  const { data, error: selectError } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('id', userId)
+    .maybeSingle();
+
+  if (selectError) {
+    console.error('[ensureProfile] 查询 profiles 失败:', selectError);
+    throw new Error(`查询用户资料失败：${selectError.message}`);
+  }
+
+  if (!data) {
+    await upsertProfile(userId, nickname);
+  }
+}
+
+export async function register(email: string, password: string, nickname: string): Promise<User> {
+  const { data, error } = await supabase.auth.signUp({
+    email,
+    password,
+    options: { data: { nickname } },
   });
-  if (profileError) {
-    throw new Error(profileError.message);
+  if (error) {
+    console.error('[register] signUp error:', error);
+    throw new Error(error.message);
+  }
+  const authUser = data.user;
+  if (!authUser) {
+    console.error('[register] signUp returned no user', data);
+    throw new Error('注册失败，请重试');
+  }
+
+  console.log('[register] signUp success, user id:', authUser.id, 'session:', data.session ? '有' : '无');
+
+  // 如果注册后直接拿到 session（邮箱验证关闭场景），立即写入 profile
+  // 如果 session 为空（邮箱验证开启场景），跳过写入，由 login 成功后兜底创建
+  if (data.session) {
+    try {
+      await upsertProfile(authUser.id, nickname);
+      console.log('[register] profile upserted');
+    } catch (err) {
+      console.error('[register] profile upsert failed:', err);
+      throw err;
+    }
+  } else {
+    console.log('[register] session 为空，跳过 profile 写入，将在 login 后补写');
   }
 
   return {
@@ -44,6 +99,7 @@ export async function register(email: string, password: string, nickname: string
 export async function login(email: string, password: string): Promise<User> {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) {
+    console.error('[login] signIn error:', error);
     throw new Error(error.message);
   }
   const authUser = data.user;
@@ -51,16 +107,27 @@ export async function login(email: string, password: string): Promise<User> {
     throw new Error('登录失败，请重试');
   }
 
+  const nickname = (authUser.user_metadata?.nickname as string) ?? '';
+
+  // 登录成功后兜底：如果 profiles 不存在则自动创建
+  try {
+    await ensureProfile(authUser.id, nickname);
+    console.log('[login] profile ensured');
+  } catch (err) {
+    console.error('[login] ensure profile failed:', err);
+    throw err;
+  }
+
   const { data: profileData } = await supabase
     .from('profiles')
     .select('nickname')
     .eq('id', authUser.id)
-    .single();
+    .maybeSingle();
 
   return {
     id: authUser.id,
     email: authUser.email ?? email,
-    nickname: profileData?.nickname ?? authUser.user_metadata?.nickname ?? '',
+    nickname: profileData?.nickname ?? nickname,
     createdAt: authUser.created_at ?? new Date().toISOString(),
   };
 }
@@ -83,12 +150,12 @@ export async function getCurrentUser(): Promise<User | null> {
     .from('profiles')
     .select('nickname')
     .eq('id', authUser.id)
-    .single();
+    .maybeSingle();
 
   return {
     id: authUser.id,
     email: authUser.email ?? '',
-    nickname: profileData?.nickname ?? authUser.user_metadata?.nickname ?? '',
+    nickname: profileData?.nickname ?? (authUser.user_metadata?.nickname as string) ?? '',
     createdAt: authUser.created_at ?? new Date().toISOString(),
   };
 }
@@ -107,51 +174,6 @@ export function saveProfile(profile: UserProfile): void {
   const profiles = getProfiles();
   profiles[profile.userId] = profile;
   setItem(STORAGE_KEYS.PROFILES, profiles);
-}
-
-export function getPlans(): Record<string, CyclePlan> {
-  return getItem<Record<string, CyclePlan>>(STORAGE_KEYS.PLANS, {});
-}
-
-export function getPlan(userId: string): CyclePlan | null {
-  return getPlans()[userId] ?? null;
-}
-
-export function savePlan(plan: CyclePlan): void {
-  const plans = getPlans();
-  plans[plan.userId] = plan;
-  setItem(STORAGE_KEYS.PLANS, plans);
-}
-
-export type DayKey = 'monday' | 'tuesday' | 'wednesday' | 'thursday' | 'friday' | 'saturday' | 'sunday';
-
-/** 更新碳循环计划中的某一天 */
-export function updatePlanDay(
-  userId: string,
-  day: DayKey,
-  cycleType: CycleType
-): CyclePlan {
-  const plan = getPlan(userId);
-  if (!plan) {
-    throw new Error('碳循环计划不存在');
-  }
-  const updated = { ...plan, [day]: cycleType, updatedAt: new Date().toISOString() };
-  savePlan(updated);
-  return updated;
-}
-
-/** 更新碳循环计划目标 */
-export function updatePlanTargets(
-  userId: string,
-  targets: CyclePlan['targets']
-): CyclePlan {
-  const plan = getPlan(userId);
-  if (!plan) {
-    throw new Error('碳循环计划不存在');
-  }
-  const updated = { ...plan, targets, updatedAt: new Date().toISOString() };
-  savePlan(updated);
-  return updated;
 }
 
 /** 更新用户目标体重 */
@@ -190,17 +212,13 @@ export function updateProfile(userId: string, input: UpdateProfileInput): UserPr
 }
 
 /** 更新当前体重并按最新体重重新计算碳循环目标 */
-export function updateCurrentWeightAndRecalcTargets(
+export async function updateCurrentWeightAndRecalcTargets(
   userId: string,
   currentWeight: number
-): { profile: UserProfile; plan: CyclePlan } {
+): Promise<{ profile: UserProfile; plan: CyclePlan }> {
   const profile = getProfile(userId);
   if (!profile) {
     throw new Error('用户档案不存在');
-  }
-  const plan = getPlan(userId);
-  if (!plan) {
-    throw new Error('碳循环计划不存在');
   }
 
   const updatedProfile: UserProfile = {
@@ -208,30 +226,14 @@ export function updateCurrentWeightAndRecalcTargets(
     currentWeight,
     updatedAt: new Date().toISOString(),
   };
-  const calc = calculateCycleTargets(updatedProfile);
-  const updatedPlan: CyclePlan = {
-    ...plan,
-    targets: calc.cycleTargets,
-    updatedAt: new Date().toISOString(),
-  };
 
   saveProfile(updatedProfile);
-  savePlan(updatedPlan);
+  const plan = await getPlan(userId, updatedProfile);
 
-  return { profile: updatedProfile, plan: updatedPlan };
+  return { profile: updatedProfile, plan };
 }
 
 // ==================== Onboarding 初始化 ====================
-
-const DEFAULT_CYCLE_PLAN: Record<DayKey, CycleType> = {
-  monday: 'high',
-  tuesday: 'medium',
-  wednesday: 'low',
-  thursday: 'high',
-  friday: 'medium',
-  saturday: 'low',
-  sunday: 'medium',
-};
 
 export interface OnboardingInput {
   gender: 'male' | 'female';
@@ -242,11 +244,11 @@ export interface OnboardingInput {
   activityLevel: 'sedentary' | 'lightly_active' | 'moderately_active' | 'highly_active';
 }
 
-export function setupUserOnboarding(
+export async function setupUserOnboarding(
   userId: string,
   input: OnboardingInput,
   dayOverrides?: Partial<Record<DayKey, CycleType>>
-): { profile: UserProfile; plan: CyclePlan } {
+): Promise<{ profile: UserProfile; plan: CyclePlan }> {
   const profile: UserProfile = {
     id: generateId('profile'),
     userId,
@@ -254,24 +256,8 @@ export function setupUserOnboarding(
     updatedAt: new Date().toISOString(),
   };
 
-  const calc = calculateCycleTargets(profile);
-
-  const plan: CyclePlan = {
-    id: generateId('plan'),
-    userId,
-    monday: dayOverrides?.monday ?? DEFAULT_CYCLE_PLAN.monday,
-    tuesday: dayOverrides?.tuesday ?? DEFAULT_CYCLE_PLAN.tuesday,
-    wednesday: dayOverrides?.wednesday ?? DEFAULT_CYCLE_PLAN.wednesday,
-    thursday: dayOverrides?.thursday ?? DEFAULT_CYCLE_PLAN.thursday,
-    friday: dayOverrides?.friday ?? DEFAULT_CYCLE_PLAN.friday,
-    saturday: dayOverrides?.saturday ?? DEFAULT_CYCLE_PLAN.saturday,
-    sunday: dayOverrides?.sunday ?? DEFAULT_CYCLE_PLAN.sunday,
-    targets: calc.cycleTargets,
-    updatedAt: new Date().toISOString(),
-  };
-
   saveProfile(profile);
-  savePlan(plan);
+  const plan = await createPlan(userId, profile, dayOverrides);
 
   return { profile, plan };
 }

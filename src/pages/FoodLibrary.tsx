@@ -1,32 +1,12 @@
-import { useState, useMemo } from 'react';
+import { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Search } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { filterFoods, deleteCustomFood } from '../services/foodService';
 import ConfirmDialog from '../components/ConfirmDialog';
+import FoodAvatar from '../components/FoodAvatar';
 import { FOOD_CATEGORY_LABELS, FOOD_CATEGORY_COLORS } from '../utils/constants';
 import { Food, FoodCategory } from '../types';
-
-function FoodImage({ food }: { food: Food }) {
-  const initials = food.name.slice(0, 1);
-  if (food.image) {
-    return (
-      <img
-        src={food.image}
-        alt={food.name}
-        className="h-12 w-12 rounded-xl object-cover"
-        onError={(e) => {
-          (e.target as HTMLImageElement).style.display = 'none';
-        }}
-      />
-    );
-  }
-  return (
-    <div className={`flex h-12 w-12 items-center justify-center rounded-xl text-sm font-bold text-white ${FOOD_CATEGORY_COLORS[food.category].split(' ')[0]}`}>
-      {initials}
-    </div>
-  );
-}
 
 const CATEGORIES: (FoodCategory | 'all')[] = [
   'all',
@@ -43,24 +23,49 @@ export default function FoodLibrary() {
   const { user } = useAuth();
   const [keyword, setKeyword] = useState('');
   const [category, setCategory] = useState<FoodCategory | 'all'>('all');
-  const [refreshKey, setRefreshKey] = useState(0);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
+  const [foods, setFoods] = useState<Food[]>([]);
+  const [error, setError] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
 
-  const foods = useMemo(() => {
-    if (!user) return [];
-    return filterFoods(user.id, { keyword, category });
-  }, [user, keyword, category, refreshKey]);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const loadFoods = async () => {
+      try {
+        setError('');
+        const data = await filterFoods(user.id, { keyword, category });
+        if (!cancelled) setFoods(data);
+      } catch (err) {
+        console.error('[FoodLibrary] load foods error:', err);
+        if (!cancelled) setError(err instanceof Error ? err.message : '加载失败');
+      }
+    };
+    loadFoods();
+    return () => {
+      cancelled = true;
+    };
+  }, [user, keyword, category]);
 
   const handleDelete = (foodId: string) => {
-    if (!user) return;
+    if (!user || isDeleting) return;
     setDeleteTargetId(foodId);
   };
 
-  const handleConfirmDelete = () => {
-    if (!user || !deleteTargetId) return;
-    deleteCustomFood(user.id, deleteTargetId);
-    setRefreshKey((k) => k + 1);
-    setDeleteTargetId(null);
+  const handleConfirmDelete = async () => {
+    if (!user || !deleteTargetId || isDeleting) return;
+    setIsDeleting(true);
+    setError('');
+    try {
+      await deleteCustomFood(user.id, deleteTargetId);
+      setFoods((prev) => prev.filter((f) => f.id !== deleteTargetId));
+    } catch (err) {
+      console.error('[FoodLibrary] delete food error:', err);
+      setError(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      setIsDeleting(false);
+      setDeleteTargetId(null);
+    }
   };
 
   return (
@@ -113,6 +118,7 @@ export default function FoodLibrary() {
       </header>
 
       <main className="mx-auto max-w-3xl px-4 pt-6">
+        {error && <p className="mb-4 text-sm text-rose-500">{error}</p>}
         <div className="space-y-3">
           {foods.map((food) => (
             <div
@@ -120,7 +126,7 @@ export default function FoodLibrary() {
               className="rounded-2xl bg-white p-4 shadow-sm"
             >
               <div className="flex items-start gap-3">
-                <FoodImage food={food} />
+                <FoodAvatar image={food.image} name={food.name} category={food.category} className="h-12 w-12" />
                 <div className="flex-1">
                   <h3 className="font-semibold text-slate-800">{food.name}</h3>
                   <span
@@ -134,7 +140,8 @@ export default function FoodLibrary() {
                 {food.source === 'custom' && (
                   <button
                     onClick={() => handleDelete(food.id)}
-                    className="text-sm text-rose-500 hover:text-rose-700"
+                    disabled={isDeleting}
+                    className="text-sm text-rose-500 hover:text-rose-700 disabled:text-rose-300"
                   >
                     删除
                   </button>
@@ -174,6 +181,7 @@ export default function FoodLibrary() {
         message="确定删除这个自定义食物吗？删除后不会影响已记录的饮食数据。"
         confirmText="删除"
         variant="danger"
+        loading={isDeleting}
         onConfirm={handleConfirmDelete}
         onCancel={() => setDeleteTargetId(null)}
       />

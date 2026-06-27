@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { TrendingDown, TrendingUp, Target } from 'lucide-react';
 import {
@@ -12,6 +12,7 @@ import {
   ReferenceLine,
 } from 'recharts';
 import { useAuth } from '../contexts/AuthContext';
+import { WeightRecord } from '../types';
 import {
   getWeightRecordsByUser,
   saveWeightRecord,
@@ -26,14 +27,31 @@ export default function WeightManagement() {
   const [weightInput, setWeightInput] = useState('');
   const [noteInput, setNoteInput] = useState('');
   const [targetInput, setTargetInput] = useState(String(profile?.targetWeight ?? ''));
-  const [refreshKey, setRefreshKey] = useState(0);
+  const [records, setRecords] = useState<WeightRecord[]>([]);
+  const [weightError, setWeightError] = useState('');
+  const [isSavingWeight, setIsSavingWeight] = useState(false);
+  const [isSavingTarget, setIsSavingTarget] = useState(false);
 
   const today = new Date().toISOString().slice(0, 10);
 
-  const records = useMemo(() => {
-    if (!user) return [];
-    return getWeightRecordsByUser(user.id);
-  }, [user, refreshKey]);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    const loadRecords = async () => {
+      try {
+        setWeightError('');
+        const data = await getWeightRecordsByUser(user.id);
+        if (!cancelled) setRecords(data);
+      } catch (err) {
+        console.error('[WeightManagement] load records error:', err);
+        if (!cancelled) setWeightError('加载失败');
+      }
+    };
+    loadRecords();
+    return () => {
+      cancelled = true;
+    };
+  }, [user]);
 
   const chartData = useMemo(() => {
     const limit = Number(range);
@@ -49,21 +67,43 @@ export default function WeightManagement() {
   const startWeight = records[0]?.weight ?? currentWeight;
   const totalChange = currentWeight - startWeight;
 
-  const handleSaveWeight = () => {
-    if (!user || !weightInput) return;
-    saveWeightRecord(user.id, today, {
-      weight: Number(weightInput),
-      note: noteInput || undefined,
-    });
-    setWeightInput('');
-    setNoteInput('');
-    setRefreshKey((k) => k + 1);
+  const handleSaveWeight = async () => {
+    if (!user || !weightInput || isSavingWeight) return;
+    setIsSavingWeight(true);
+    setWeightError('');
+    try {
+      const saved = await saveWeightRecord(user.id, today, {
+        weight: Number(weightInput),
+        note: noteInput || undefined,
+      });
+      setWeightInput('');
+      setNoteInput('');
+      setRecords((prev) => {
+        const next = prev.filter((r) => r.date !== saved.date);
+        next.push(saved);
+        next.sort((a, b) => a.date.localeCompare(b.date));
+        return next;
+      });
+    } catch (err) {
+      console.error('[WeightManagement] save weight error:', err);
+      setWeightError('保存失败');
+    } finally {
+      setIsSavingWeight(false);
+    }
   };
 
-  const handleSaveTarget = () => {
-    if (!user || !targetInput) return;
-    updateTargetWeight(user.id, Number(targetInput));
-    refreshProfile();
+  const handleSaveTarget = async () => {
+    if (!user || !targetInput || isSavingTarget) return;
+    setIsSavingTarget(true);
+    try {
+      updateTargetWeight(user.id, Number(targetInput));
+      await refreshProfile();
+    } catch (err) {
+      console.error('[WeightManagement] save target error:', err);
+      setWeightError('保存目标失败');
+    } finally {
+      setIsSavingTarget(false);
+    }
   };
 
   return (
@@ -179,9 +219,10 @@ export default function WeightManagement() {
             />
             <button
               onClick={handleSaveTarget}
-              className="rounded-xl bg-emerald-600 px-5 py-3 font-medium text-white transition hover:bg-emerald-700"
+              disabled={isSavingTarget}
+              className="rounded-xl bg-emerald-600 px-5 py-3 font-medium text-white transition hover:bg-emerald-700 disabled:bg-emerald-400 disabled:opacity-70"
             >
-              保存
+              {isSavingTarget ? '保存中...' : '保存'}
             </button>
           </div>
         </section>
@@ -207,11 +248,12 @@ export default function WeightManagement() {
             />
             <button
               onClick={handleSaveWeight}
-              disabled={!weightInput}
+              disabled={!weightInput || isSavingWeight}
               className="w-full rounded-xl bg-emerald-600 px-5 py-3 font-medium text-white transition hover:bg-emerald-700 disabled:bg-slate-300"
             >
-              记录体重
+              {isSavingWeight ? '保存中...' : '记录体重'}
             </button>
+            {weightError && <p className="text-sm text-rose-500">{weightError}</p>}
           </div>
         </section>
       </main>

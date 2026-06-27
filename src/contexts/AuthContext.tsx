@@ -6,8 +6,8 @@ import {
   register as registerService,
   logout as logoutService,
   getProfile,
-  getPlan,
 } from '../services/authService';
+import { getPlan } from '../services/planService';
 
 interface AuthContextValue {
   user: User | null;
@@ -17,7 +17,7 @@ interface AuthContextValue {
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, nickname: string) => Promise<void>;
   logout: () => Promise<void>;
-  refreshProfile: () => void;
+  refreshProfile: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -31,8 +31,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const loadUserData = async (currentUser: User | null) => {
     setUser(currentUser);
     if (currentUser) {
-      setProfile(getProfile(currentUser.id));
-      setPlan(getPlan(currentUser.id));
+      const currentProfile = getProfile(currentUser.id);
+      setProfile(currentProfile);
+      if (currentProfile) {
+        try {
+          const currentPlan = await getPlan(currentUser.id, currentProfile);
+          setPlan(currentPlan);
+        } catch (err) {
+          console.error('[AuthContext] load plan error:', err);
+          setPlan(null);
+        }
+      } else {
+        setPlan(null);
+      }
     } else {
       setProfile(null);
       setPlan(null);
@@ -71,10 +82,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await loadUserData(null);
   };
 
-  const refreshProfile = () => {
+  const refreshProfile = async () => {
     if (user) {
-      setProfile(getProfile(user.id));
-      setPlan(getPlan(user.id));
+      const currentProfile = getProfile(user.id);
+      setProfile(currentProfile);
+      if (currentProfile) {
+        try {
+          const currentPlan = await getPlan(user.id, currentProfile);
+          setPlan(currentPlan);
+        } catch (err) {
+          console.error('[AuthContext] refresh plan error:', err);
+          setPlan(null);
+        }
+      } else {
+        setPlan(null);
+      }
     }
   };
 

@@ -1,7 +1,8 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { setupUserOnboarding, OnboardingInput, DayKey } from '../services/authService';
+import { setupUserOnboarding, OnboardingInput } from '../services/authService';
+import { DayKey } from '../services/planService';
 import { ACTIVITY_LABELS, GENDER_LABELS, CYCLE_STRATEGY } from '../utils/constants';
 import { calculateCycleTargets } from '../utils/calculator';
 import { ActivityLevel, CycleType, Gender } from '../types';
@@ -45,6 +46,7 @@ export default function Onboarding() {
   const [weekPlan, setWeekPlan] = useState<Record<DayKey, CycleType>>(DEFAULT_WEEK_PLAN);
   const [calcResult, setCalcResult] = useState<ReturnType<typeof calculateCycleTargets> | null>(null);
   const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // 未登录用户不能填写资料
   if (!user) {
@@ -97,13 +99,17 @@ export default function Onboarding() {
     setWeekPlan((prev) => ({ ...prev, [day]: type }));
   };
 
-  const handleConfirm = () => {
+  const handleConfirm = async () => {
+    if (isSubmitting) return;
+    setIsSubmitting(true);
     try {
-      setupUserOnboarding(user.id, form, weekPlan);
-      refreshProfile();
+      await setupUserOnboarding(user.id, form, weekPlan);
+      await refreshProfile();
       navigate('/', { replace: true });
     } catch (err) {
-      setError((err as Error).message);
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -233,9 +239,10 @@ export default function Onboarding() {
               </button>
               <button
                 onClick={handleConfirm}
-                className="flex-1 rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700"
+                disabled={isSubmitting}
+                className="flex-1 rounded-xl bg-emerald-600 py-3 font-semibold text-white transition hover:bg-emerald-700 disabled:bg-emerald-400 disabled:opacity-70"
               >
-                确认并开始
+                {isSubmitting ? '保存中...' : '确认并开始'}
               </button>
             </div>
           </div>
