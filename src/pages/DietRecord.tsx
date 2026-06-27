@@ -4,6 +4,7 @@ import { ArrowLeft, Search, Plus, X, Trash2 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { filterFoods, getRecentFoods, getFrequentFoods, getLastUsedWeight } from '../services/foodService';
 import { addFoodToMeal, getDailyRecord, removeFoodFromMeal } from '../services/dailyRecordService';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { getCycleTypeForDate } from '../utils/calculator';
 import { FOOD_CATEGORY_LABELS, FOOD_CATEGORY_COLORS, MEAL_CONFIG } from '../utils/constants';
 import { Food, FoodCategory, MealType, MealFood } from '../types';
@@ -96,6 +97,7 @@ export default function DietRecord() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [addedHighlightId, setAddedHighlightId] = useState<string | null>(null);
   const [showAdded, setShowAdded] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<MealFood | null>(null);
 
   if (!user || !date) {
     navigate('/', { replace: true });
@@ -164,10 +166,14 @@ export default function DietRecord() {
   };
 
   const handleDelete = (mf: MealFood) => {
-    if (confirm('确定删除这条记录吗？')) {
-      removeFoodFromMeal(user.id, date, mealType, mf.id);
-      setRefreshKey((k) => k + 1);
-    }
+    setDeleteTarget(mf);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!deleteTarget) return;
+    removeFoodFromMeal(user.id, date, mealType, deleteTarget.id);
+    setRefreshKey((k) => k + 1);
+    setDeleteTarget(null);
   };
 
   return (
@@ -398,6 +404,16 @@ export default function DietRecord() {
           </div>
         </div>
       )}
+
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        title="删除记录"
+        message="确定删除这条记录吗？"
+        confirmText="删除"
+        variant="danger"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }

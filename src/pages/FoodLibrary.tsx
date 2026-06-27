@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { Plus, Search } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { filterFoods, deleteCustomFood } from '../services/foodService';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { FOOD_CATEGORY_LABELS, FOOD_CATEGORY_COLORS } from '../utils/constants';
 import { Food, FoodCategory } from '../types';
 
@@ -43,6 +44,7 @@ export default function FoodLibrary() {
   const [keyword, setKeyword] = useState('');
   const [category, setCategory] = useState<FoodCategory | 'all'>('all');
   const [refreshKey, setRefreshKey] = useState(0);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   const foods = useMemo(() => {
     if (!user) return [];
@@ -51,10 +53,14 @@ export default function FoodLibrary() {
 
   const handleDelete = (foodId: string) => {
     if (!user) return;
-    if (confirm('确定删除这个自定义食物吗？')) {
-      deleteCustomFood(user.id, foodId);
-      setRefreshKey((k) => k + 1);
-    }
+    setDeleteTargetId(foodId);
+  };
+
+  const handleConfirmDelete = () => {
+    if (!user || !deleteTargetId) return;
+    deleteCustomFood(user.id, deleteTargetId);
+    setRefreshKey((k) => k + 1);
+    setDeleteTargetId(null);
   };
 
   return (
@@ -161,6 +167,16 @@ export default function FoodLibrary() {
           <div className="py-12 text-center text-slate-500">未找到匹配的食物</div>
         )}
       </main>
+
+      <ConfirmDialog
+        isOpen={!!deleteTargetId}
+        title="删除自定义食物"
+        message="确定删除这个自定义食物吗？删除后不会影响已记录的饮食数据。"
+        confirmText="删除"
+        variant="danger"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeleteTargetId(null)}
+      />
     </div>
   );
 }

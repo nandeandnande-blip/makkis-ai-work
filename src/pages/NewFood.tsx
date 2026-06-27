@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
@@ -31,6 +31,7 @@ export default function NewFood() {
     fatPer100g: '',
   });
   const [error, setError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!user) {
     navigate('/login', { replace: true });
@@ -39,6 +40,28 @@ export default function NewFood() {
 
   const handleChange = (field: keyof typeof form, value: string) => {
     setForm((prev) => ({ ...prev, [field]: value }));
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      setError('请选择图片文件');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const dataUrl = event.target?.result as string;
+      setForm((prev) => ({ ...prev, image: dataUrl }));
+      setError('');
+    };
+    reader.onerror = () => setError('图片读取失败，请重试');
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveImage = () => {
+    setForm((prev) => ({ ...prev, image: '' }));
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -101,14 +124,39 @@ export default function NewFood() {
             </div>
 
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">图片链接（可选）</label>
+              <label className="mb-2 block text-sm font-medium text-slate-700">图片（可选）</label>
               <input
-                type="url"
-                value={form.image}
-                onChange={(e) => handleChange('image', e.target.value)}
-                className="w-full rounded-xl border border-slate-200 px-4 py-3 outline-none focus:border-emerald-500"
-                placeholder="https://example.com/food.jpg"
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleFileChange}
               />
+              {form.image ? (
+                <div className="relative inline-block">
+                  <img
+                    src={form.image}
+                    alt="食物预览"
+                    className="h-32 w-32 rounded-xl object-cover"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleRemoveImage}
+                    className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-rose-500 text-white shadow-sm"
+                  >
+                    ×
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex h-32 w-32 flex-col items-center justify-center rounded-xl border-2 border-dashed border-slate-300 bg-slate-50 text-slate-500 transition hover:border-emerald-500 hover:text-emerald-600"
+                >
+                  <span className="text-2xl">+</span>
+                  <span className="mt-1 text-xs">选择图片</span>
+                </button>
+              )}
             </div>
 
             <div>

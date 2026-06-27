@@ -14,6 +14,7 @@ import { calculateCycleTargets, getCycleTypeForDate, sumMacros } from '../utils/
 import { useAuth } from '../contexts/AuthContext';
 import { getDailyRecord, removeFoodFromMeal } from '../services/dailyRecordService';
 import { getFoodById } from '../services/foodService';
+import ConfirmDialog from '../components/ConfirmDialog';
 import { updateCurrentWeightAndRecalcTargets } from '../services/authService';
 import {
   getWeightRecordByDate,
@@ -100,14 +101,14 @@ function MacroCard({
 }) {
   const percent = Math.min(100, Math.round((value / total) * 100));
   return (
-    <div className="rounded-2xl bg-white p-4 shadow-sm">
+    <div className="rounded-2xl bg-white p-3 shadow-sm sm:p-4">
       <div className="mb-2 flex items-center justify-between">
-        <span className="text-sm text-slate-500">{label}</span>
-        <span className="text-xs font-medium text-slate-400">{unit}</span>
+        <span className="text-xs text-slate-500 sm:text-sm">{label}</span>
+        <span className="text-[10px] font-medium text-slate-400 sm:text-xs">{unit}</span>
       </div>
       <div className="mb-3 flex items-baseline gap-1">
-        <span className="text-2xl font-bold text-slate-800">{Math.round(value)}</span>
-        <span className="text-sm text-slate-400">/ {total}</span>
+        <span className="text-xl font-bold text-slate-800 sm:text-2xl">{Math.round(value)}</span>
+        <span className="text-xs text-slate-400 sm:text-sm">/ {total}</span>
       </div>
       <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100">
         <div
@@ -149,6 +150,7 @@ export default function Dashboard() {
   const [weightNote, setWeightNote] = useState('');
   const [weightRefreshKey, setWeightRefreshKey] = useState(0);
   const [dailyRecordRefreshKey, setDailyRecordRefreshKey] = useState(0);
+  const [deleteTarget, setDeleteTarget] = useState<{ mealType: MealType; mealFoodId: string } | null>(null);
 
   // 支持通过 URL ?date= 切换日期，默认今天
   const selectedDate = useMemo(
@@ -181,10 +183,14 @@ export default function Dashboard() {
 
   const handleDeleteMealFood = (mealType: MealType, mealFoodId: string) => {
     if (!user) return;
-    if (confirm('确定删除该食物记录？')) {
-      removeFoodFromMeal(user.id, selectedDate, mealType, mealFoodId);
-      setDailyRecordRefreshKey((k) => k + 1);
-    }
+    setDeleteTarget({ mealType, mealFoodId });
+  };
+
+  const handleConfirmDelete = () => {
+    if (!user || !deleteTarget) return;
+    removeFoodFromMeal(user.id, selectedDate, deleteTarget.mealType, deleteTarget.mealFoodId);
+    setDailyRecordRefreshKey((k) => k + 1);
+    setDeleteTarget(null);
   };
 
   const allMealFoods = dailyRecord.meals.flatMap((m) => m.foods);
@@ -228,23 +234,25 @@ export default function Dashboard() {
   return (
     <div className="min-h-screen bg-slate-50 pb-24">
       {/* Header */}
-      <header className="bg-gradient-to-br from-emerald-500 to-teal-600 px-6 pb-8 pt-12 text-white">
+      <header className="bg-gradient-to-br from-emerald-500 to-teal-600 px-4 pb-6 pt-8 text-white sm:px-6 sm:pb-8 sm:pt-12">
         <div className="mx-auto max-w-3xl">
-          <div className="flex items-start justify-between">
-            <div className="flex-1">
-              <h1 className="text-2xl font-bold leading-tight">
+          <div className="flex items-start justify-between gap-4">
+            <div className="min-w-0 flex-1">
+              <h1 className="text-xl font-bold leading-tight sm:text-2xl">
                 {user?.nickname ? `${user.nickname}，你好` : '你好'}
-                <span className="block text-base font-normal opacity-90">今天也要加油</span>
+                <span className="block text-sm font-normal opacity-90 sm:text-base">今天也要加油</span>
               </h1>
               <div className="mt-2 flex flex-wrap items-center gap-2">
                 <button
                   onClick={() => navigate('/calendar')}
-                  className="flex items-center gap-2 rounded-lg bg-white/20 px-3 py-2 text-left transition hover:bg-white/30"
+                  className="flex flex-col gap-1 rounded-lg bg-white/20 px-3 py-2 text-left transition hover:bg-white/30 sm:flex-row sm:items-center sm:gap-2"
                 >
-                  <span className="text-sm font-medium opacity-90">{selectedDate}</span>
-                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold text-white ${strategy.color}`}>
-                    {strategy.label}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="whitespace-nowrap text-sm font-medium opacity-90">{selectedDate}</span>
+                    <span className={`shrink-0 rounded-md px-2 py-0.5 text-xs font-semibold text-white sm:rounded-full ${strategy.color}`}>
+                      {strategy.label}
+                    </span>
+                  </div>
                   <span className="text-xs opacity-90">{strategy.tip}</span>
                 </button>
                 {!isToday && (
@@ -265,7 +273,7 @@ export default function Dashboard() {
             </div>
             <button
               onClick={logout}
-              className="rounded-lg bg-white/20 px-3 py-1 text-sm text-white hover:bg-white/30"
+              className="shrink-0 self-start rounded-lg bg-white/20 px-3 py-1 text-sm text-white hover:bg-white/30 sm:self-auto"
             >
               退出
             </button>
@@ -486,6 +494,16 @@ export default function Dashboard() {
           )}
         </section>
       </main>
+
+      <ConfirmDialog
+        isOpen={!!deleteTarget}
+        title="删除食物记录"
+        message="确定删除该食物记录？"
+        confirmText="删除"
+        variant="danger"
+        onConfirm={handleConfirmDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </div>
   );
 }
