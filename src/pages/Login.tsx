@@ -15,11 +15,11 @@ export default function Login() {
     return null;
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     try {
-      login(email, password);
+      await login(email, password);
       navigate('/', { replace: true });
     } catch (err) {
       setError((err as Error).message);

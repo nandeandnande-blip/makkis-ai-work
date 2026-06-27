@@ -14,9 +14,9 @@ interface AuthContextValue {
   profile: UserProfile | null;
   plan: CyclePlan | null;
   isLoading: boolean;
-  login: (email: string, password: string) => void;
-  register: (email: string, password: string, nickname: string) => void;
-  logout: () => void;
+  login: (email: string, password: string) => Promise<void>;
+  register: (email: string, password: string, nickname: string) => Promise<void>;
+  logout: () => Promise<void>;
   refreshProfile: () => void;
 }
 
@@ -28,7 +28,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [plan, setPlan] = useState<CyclePlan | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const loadUserData = (currentUser: User | null) => {
+  const loadUserData = async (currentUser: User | null) => {
     setUser(currentUser);
     if (currentUser) {
       setProfile(getProfile(currentUser.id));
@@ -40,26 +40,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   useEffect(() => {
-    const currentUser = getCurrentUser();
-    loadUserData(currentUser);
-    setIsLoading(false);
+    let cancelled = false;
+    const init = async () => {
+      const currentUser = await getCurrentUser();
+      if (!cancelled) {
+        await loadUserData(currentUser);
+        setIsLoading(false);
+      }
+    };
+    init();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  const login = (email: string, password: string) => {
-    const loggedInUser = loginService(email, password);
-    loadUserData(loggedInUser);
+  const login = async (email: string, password: string) => {
+    const loggedInUser = await loginService(email, password);
+    await loadUserData(loggedInUser);
   };
 
-  const register = (email: string, password: string, nickname: string) => {
-    const newUser = registerService(email, password, nickname);
+  const register = async (email: string, password: string, nickname: string) => {
+    const newUser = await registerService(email, password, nickname);
     setUser(newUser);
     setProfile(null);
     setPlan(null);
   };
 
-  const logout = () => {
-    logoutService();
-    loadUserData(null);
+  const logout = async () => {
+    await logoutService();
+    await loadUserData(null);
   };
 
   const refreshProfile = () => {

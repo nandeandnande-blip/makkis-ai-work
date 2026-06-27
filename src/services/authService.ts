@@ -1,71 +1,96 @@
 import { User, UserProfile, CyclePlan, CycleType } from '../types';
-import { getItem, setItem, removeItem, STORAGE_KEYS } from './storage';
+import { getItem, setItem, STORAGE_KEYS } from './storage';
 import { calculateCycleTargets } from '../utils/calculator';
-
-// ==================== 用户注册 / 登录 ====================
-
-export function getUsers(): User[] {
-  return getItem<User[]>(STORAGE_KEYS.USERS, []);
-}
-
-function saveUsers(users: User[]): void {
-  setItem(STORAGE_KEYS.USERS, users);
-}
-
-function hashPassword(password: string): string {
-  // V1 仅做简单字符串混淆，后续接入后端时替换为 bcrypt
-  let hash = 0;
-  for (let i = 0; i < password.length; i++) {
-    const char = password.charCodeAt(i);
-    hash = (hash << 5) - hash + char;
-    hash |= 0;
-  }
-  return String(hash);
-}
+import { supabase } from '../lib/supabase';
 
 function generateId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
-export function register(email: string, password: string, nickname: string): User {
-  const users = getUsers();
-  if (users.some((u) => u.email === email)) {
-    throw new Error('该邮箱已被注册');
+// ==================== Supabase Auth ====================
+
+export async function register(email: string, password: string, nickname: string): Promise<User> {
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const authUser = data.user;
+  if (!authUser) {
+    throw new Error('注册失败，请重试');
   }
 
-  const newUser: User = {
-    id: generateId('user'),
-    email,
-    passwordHash: hashPassword(password),
+  const { error: profileError } = await supabase.from('profiles').insert({
+    id: authUser.id,
     nickname,
-    createdAt: new Date().toISOString(),
-  };
-
-  saveUsers([...users, newUser]);
-  setItem(STORAGE_KEYS.CURRENT_USER, newUser);
-  return newUser;
-}
-
-export function login(email: string, password: string): User {
-  const users = getUsers();
-  const user = users.find((u) => u.email === email && u.passwordHash === hashPassword(password));
-  if (!user) {
-    throw new Error('邮箱或密码错误');
+    gender: null,
+    height: null,
+    current_weight: null,
+    target_weight: null,
+    activity_level: null,
+    updated_at: new Date().toISOString(),
+  });
+  if (profileError) {
+    throw new Error(profileError.message);
   }
-  setItem(STORAGE_KEYS.CURRENT_USER, user);
-  return user;
+
+  return {
+    id: authUser.id,
+    email: authUser.email ?? email,
+    nickname,
+    createdAt: authUser.created_at ?? new Date().toISOString(),
+  };
 }
 
-export function logout(): void {
-  removeItem(STORAGE_KEYS.CURRENT_USER);
+export async function login(email: string, password: string): Promise<User> {
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    throw new Error(error.message);
+  }
+  const authUser = data.user;
+  if (!authUser) {
+    throw new Error('登录失败，请重试');
+  }
+
+  const { data: profileData } = await supabase
+    .from('profiles')
+    .select('nickname')
+    .eq('id', authUser.id)
+    .single();
+
+  return {
+    id: authUser.id,
+    email: authUser.email ?? email,
+    nickname: profileData?.nickname ?? authUser.user_metadata?.nickname ?? '',
+    createdAt: authUser.created_at ?? new Date().toISOString(),
+  };
 }
 
-export function getCurrentUser(): User | null {
-  const user = getItem<User | null>(STORAGE_KEYS.CURRENT_USER, null);
-  if (!user) return null;
-  // 确保缓存的当前用户仍存在于用户列表中，防止数据被清理后仍显示登录
-  const users = getUsers();
-  return users.find((u) => u.id === user.id) ? user : null;
+export async function logout(): Promise<void> {
+  const { error } = await supabase.auth.signOut();
+  if (error) {
+    throw new Error(error.message);
+  }
+}
+
+export async function getCurrentUser(): Promise<User | null> {
+  const { data, error } = await supabase.auth.getUser();
+  if (error || !data.user) {
+    return null;
+  }
+  const authUser = data.user;
+
+  const { data: profileData } = await supabase
+    .from('profiles')
+    .select('nickname')
+    .eq('id', authUser.id)
+    .single();
+
+  return {
+    id: authUser.id,
+    email: authUser.email ?? '',
+    nickname: profileData?.nickname ?? authUser.user_metadata?.nickname ?? '',
+    createdAt: authUser.created_at ?? new Date().toISOString(),
+  };
 }
 
 // ==================== 用户档案与碳循环计划 ====================

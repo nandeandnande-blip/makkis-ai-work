@@ -16,11 +16,11 @@ export default function Register() {
     return null;
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     try {
-      register(email, password, nickname);
+      await register(email, password, nickname);
       // 注册成功后需要填写资料
       navigate('/onboarding', { replace: true });
     } catch (err) {

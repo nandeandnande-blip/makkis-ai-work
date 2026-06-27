@@ -33,8 +33,8 @@ export type FoodCategory = 'protein' | 'carb' | 'fat' | 'vegetable' | 'fruit' | 
 export interface User {
   id: string;
   email: string;
-  /** 本地存储使用简单哈希，V2 迁移到后端时替换 */
-  passwordHash: string;
+  /** 本地存储使用简单哈希，V2 迁移到后端时替换；Supabase 阶段不再使用 */
+  passwordHash?: string;
   nickname: string;
   createdAt: string;
 }
