@@ -69,31 +69,19 @@ ${mealText || '暂无记录'}
 4. 一句鼓励`;
 }
 
+interface ChatCompletionResponse {
+  choices?: Array<{
+    message?: {
+      role?: string;
+      content?: string;
+    };
+  }>;
+}
+
 function extractOutputText(data: unknown): string {
-  if (typeof data !== 'object' || data === null) return '';
-  const d = data as Record<string, unknown>;
-
-  if (typeof d.output_text === 'string' && d.output_text) {
-    return d.output_text;
-  }
-
-  const output = Array.isArray(d.output) ? d.output : [];
-  for (const item of output) {
-    if (typeof item !== 'object' || item === null) continue;
-    const content = (item as Record<string, unknown>).content;
-    if (Array.isArray(content)) {
-      for (const part of content) {
-        if (typeof part === 'object' && part !== null && typeof (part as Record<string, unknown>).text === 'string') {
-          return (part as Record<string, string>).text;
-        }
-      }
-    }
-    if (typeof (item as Record<string, unknown>).text === 'string') {
-      return (item as Record<string, string>).text;
-    }
-  }
-
-  return '';
+  const d = data as ChatCompletionResponse;
+  const content = d.choices?.[0]?.message?.content;
+  return content?.trim() ?? '';
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -101,9 +89,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: '仅支持 POST 请求' });
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
-    return res.status(500).json({ error: 'OPENAI_API_KEY 未配置，请联系管理员' });
+    return res.status(500).json({ error: 'DeepSeek API Key 未配置' });
   }
 
   const payload = req.body as DietPayload;
@@ -117,27 +105,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const openaiRes = await fetch('https://api.openai.com/v1/responses', {
+    const deepseekRes = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${apiKey}`,
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
-        input: buildPrompt(payload),
-        max_output_tokens: 600,
+        model: 'deepseek-v4-flash',
+        messages: [
+          { role: 'user', content: buildPrompt(payload) },
+        ],
+        max_tokens: 600,
         temperature: 0.7,
       }),
     });
 
-    if (!openaiRes.ok) {
-      const errorText = await openaiRes.text();
-      console.error('[analyze-diet] OpenAI API error:', openaiRes.status, errorText);
-      return res.status(500).json({ error: 'AI 服务调用失败，请稍后重试' });
+    if (!deepseekRes.ok) {
+      const errorText = await deepseekRes.text();
+      console.error('[analyze-diet] DeepSeek API error:', deepseekRes.status, errorText);
+      return res.status(500).json({ error: 'AI服务调用失败，请稍后重试' });
     }
 
-    const data = await openaiRes.json();
+    const data = await deepseekRes.json();
     const analysis = extractOutputText(data);
 
     if (!analysis) {
