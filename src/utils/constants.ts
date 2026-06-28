@@ -44,13 +44,13 @@ export const CYCLE_STRATEGY: Record<
 
 /** 星期映射 */
 export const WEEK_DAYS = [
-  { key: 'monday', label: '周一' },
-  { key: 'tuesday', label: '周二' },
-  { key: 'wednesday', label: '周三' },
-  { key: 'thursday', label: '周四' },
-  { key: 'friday', label: '周五' },
-  { key: 'saturday', label: '周六' },
-  { key: 'sunday', label: '周日' },
+  { key: 'sunday', label: '日' },
+  { key: 'monday', label: '一' },
+  { key: 'tuesday', label: '二' },
+  { key: 'wednesday', label: '三' },
+  { key: 'thursday', label: '四' },
+  { key: 'friday', label: '五' },
+  { key: 'saturday', label: '六' },
 ] as const;
 
 /** 餐次配置 */

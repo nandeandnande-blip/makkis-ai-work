@@ -18,6 +18,7 @@ import {
   saveWeightRecord,
 } from '../services/weightService';
 import { updateTargetWeight } from '../services/authService';
+import { getTodayLocal } from '../utils/date';
 
 type Range = '7' | '30';
 
@@ -32,7 +33,7 @@ export default function WeightManagement() {
   const [isSavingWeight, setIsSavingWeight] = useState(false);
   const [isSavingTarget, setIsSavingTarget] = useState(false);
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getTodayLocal();
 
   useEffect(() => {
     if (!user) return;

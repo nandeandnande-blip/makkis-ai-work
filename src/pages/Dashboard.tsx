@@ -5,11 +5,13 @@ import {
   ChevronRight,
   Flame,
   Scale,
+  Sparkles,
   Trash2,
   Utensils,
 } from 'lucide-react';
 import { CycleTarget, CycleType, DailyRecord, Food, MealType, UserProfile, WeightRecord } from '../types';
 import { CYCLE_STRATEGY, MEAL_CONFIG } from '../utils/constants';
+import { getTodayLocal } from '../utils/date';
 import { calculateCycleTargets, getCycleTypeForDate, sumMacros } from '../utils/calculator';
 import { useAuth } from '../contexts/AuthContext';
 import { getDailyRecord, removeFoodFromMeal } from '../services/dailyRecordService';
@@ -135,13 +137,16 @@ export default function Dashboard() {
   });
   const [isDeletingMealFood, setIsDeletingMealFood] = useState(false);
   const [isSavingWeight, setIsSavingWeight] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
 
   // 支持通过 URL ?date= 切换日期，默认今天
   const selectedDate = useMemo(
-    () => searchParams.get('date') ?? new Date().toISOString().slice(0, 10),
+    () => searchParams.get('date') ?? getTodayLocal(),
     [searchParams]
   );
-  const isToday = selectedDate === new Date().toISOString().slice(0, 10);
+  const isToday = selectedDate === getTodayLocal();
 
   // 优先使用真实用户数据，否则回退到 Mock
   const profile = realProfile ?? mockProfile;
@@ -274,7 +279,7 @@ export default function Dashboard() {
       const weight = Number(weightInput);
       const saved = await saveWeightRecord(user.id, selectedDate, { weight, note: weightNote || undefined });
       // 记录今日体重时，同步更新档案当前体重并重新计算摄入目标
-      if (selectedDate === new Date().toISOString().slice(0, 10)) {
+      if (selectedDate === getTodayLocal()) {
         await updateCurrentWeightAndRecalcTargets(user.id, weight);
         await refreshProfile();
       }
@@ -299,6 +304,55 @@ export default function Dashboard() {
 
   const navigateToDiet = (mealType: MealType) => {
     navigate(`/diet/${selectedDate}?meal=${mealType}`);
+  };
+
+  const handleAnalyzeDiet = async () => {
+    if (!user || aiLoading) return;
+    setAiLoading(true);
+    setAiError('');
+    try {
+      const meals = dailyRecord.meals
+        .filter((m) => m.foods.length > 0)
+        .map((m) => ({
+          mealType: MEAL_CONFIG[m.mealType].label,
+          foods: m.foods.map((mf) => {
+            const foodById = mf.foodId ? foodMap.byId[mf.foodId] : undefined;
+            const foodName = mf.foodName ?? foodById?.name ?? '未知食物';
+            return {
+              name: foodName,
+              weight: mf.weight,
+              calories: mf.calories,
+              protein: mf.protein,
+              carbs: mf.carbs,
+              fat: mf.fat,
+            };
+          }),
+        }));
+
+      const payload = {
+        date: selectedDate,
+        cycleType: strategy.label,
+        targets: target,
+        intake,
+        meals,
+      };
+
+      const res = await fetch('/api/analyze-diet', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'AI 分析失败');
+      }
+      setAiAnalysis(data.analysis);
+    } catch (err) {
+      console.error('[Dashboard] AI analyze error:', err);
+      setAiError('AI分析失败，请稍后重试');
+    } finally {
+      setAiLoading(false);
+    }
   };
 
   return (
@@ -529,6 +583,27 @@ export default function Dashboard() {
               );
             })}
           </div>
+        </section>
+
+        {/* AI 今日饮食分析 */}
+        <section className="rounded-3xl bg-white p-6 shadow-sm">
+          <h2 className="mb-4 flex items-center gap-2 text-lg font-bold text-slate-800">
+            <Sparkles size={20} className="text-amber-500" />
+            AI 今日饮食分析
+          </h2>
+          <button
+            onClick={handleAnalyzeDiet}
+            disabled={!user || aiLoading}
+            className="w-full rounded-xl bg-slate-900 px-5 py-3 font-medium text-white transition hover:bg-slate-800 disabled:bg-slate-400 disabled:opacity-70"
+          >
+            {aiLoading ? 'AI正在分析...' : aiAnalysis ? '重新分析今日饮食' : 'AI 分析今日饮食'}
+          </button>
+          {aiError && <p className="mt-3 text-sm text-rose-500">{aiError}</p>}
+          {aiAnalysis && (
+            <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm leading-relaxed text-slate-700 whitespace-pre-line">
+              {aiAnalysis}
+            </div>
+          )}
         </section>
 
         {/* 导航入口 */}

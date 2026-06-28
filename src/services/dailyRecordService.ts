@@ -173,6 +173,35 @@ export async function getDailyRecord(
   }
 }
 
+/** 获取日期范围内的每日记录（包含 meal_foods），返回 date -> DailyRecord 映射 */
+export async function getDailyRecordsByDateRange(
+  userId: string,
+  start: string,
+  end: string
+): Promise<Record<string, DailyRecord>> {
+  const { data, error } = await supabase
+    .from('daily_records')
+    .select('*, meal_foods(*)')
+    .eq('user_id', userId)
+    .gte('date', start)
+    .lte('date', end);
+
+  if (error) {
+    console.error('[dailyRecordService] getDailyRecordsByDateRange error:', error);
+    return {};
+  }
+
+  const map: Record<string, DailyRecord> = {};
+  (data as Array<{ meal_foods: MealFoodRow[] } & DailyRecordRow> | null ?? []).forEach((row) => {
+    const { meal_foods, ...recordRow } = row;
+    const record = toDailyRecord(recordRow as DailyRecordRow, meal_foods ?? []);
+    setCachedRecord(userId, record.date, record);
+    map[record.date] = record;
+  });
+
+  return map;
+}
+
 /** 获取或创建某天的记录 */
 export async function getOrCreateDailyRecord(
   userId: string,
