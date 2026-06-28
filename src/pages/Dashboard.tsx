@@ -40,6 +40,19 @@ const mockProfile: UserProfile = {
   updatedAt: '2026-06-20T08:00:00Z',
 };
 
+interface NextMealSuggestion {
+  food: string;
+  amount: string;
+  reason: string;
+}
+
+interface DietAnalysisResult {
+  overall: string;
+  issues: string[];
+  nextMealSuggestions: NextMealSuggestion[];
+  encouragement: string;
+}
+
 const mockPlan = {
   id: 'plan-1',
   userId: 'user-1',
@@ -137,7 +150,7 @@ export default function Dashboard() {
   });
   const [isDeletingMealFood, setIsDeletingMealFood] = useState(false);
   const [isSavingWeight, setIsSavingWeight] = useState(false);
-  const [aiAnalysis, setAiAnalysis] = useState('');
+  const [aiResult, setAiResult] = useState<DietAnalysisResult | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState('');
 
@@ -310,6 +323,7 @@ export default function Dashboard() {
     if (!user || aiLoading) return;
     setAiLoading(true);
     setAiError('');
+    setAiResult(null);
     try {
       const meals = dailyRecord.meals
         .filter((m) => m.foods.length > 0)
@@ -346,7 +360,7 @@ export default function Dashboard() {
       if (!res.ok) {
         throw new Error(data.error || 'AI 分析失败');
       }
-      setAiAnalysis(data.analysis);
+      setAiResult(data.result as DietAnalysisResult);
     } catch (err) {
       console.error('[Dashboard] AI analyze error:', err);
       setAiError('AI分析失败，请稍后重试');
@@ -596,12 +610,48 @@ export default function Dashboard() {
             disabled={!user || aiLoading}
             className="w-full rounded-xl bg-slate-900 px-5 py-3 font-medium text-white transition hover:bg-slate-800 disabled:bg-slate-400 disabled:opacity-70"
           >
-            {aiLoading ? 'AI正在分析...' : aiAnalysis ? '重新分析今日饮食' : 'AI 分析今日饮食'}
+            {aiLoading ? 'AI正在分析...' : aiResult ? '重新分析今日饮食' : 'AI 分析今日饮食'}
           </button>
           {aiError && <p className="mt-3 text-sm text-rose-500">{aiError}</p>}
-          {aiAnalysis && (
-            <div className="mt-4 rounded-xl bg-slate-50 p-4 text-sm leading-relaxed text-slate-700 whitespace-pre-line">
-              {aiAnalysis}
+          {aiResult && (
+            <div className="mt-4 space-y-3">
+              <div className="rounded-xl bg-slate-50 p-4">
+                <h3 className="mb-1 text-sm font-bold text-slate-800">今日整体评价</h3>
+                <p className="text-sm text-slate-700">{aiResult.overall}</p>
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-4">
+                <h3 className="mb-2 text-sm font-bold text-slate-800">当前主要偏差</h3>
+                {aiResult.issues.length === 0 ? (
+                  <p className="text-sm text-slate-500">暂无显著偏差</p>
+                ) : (
+                  <ul className="list-inside list-disc space-y-1 text-sm text-slate-700">
+                    {aiResult.issues.map((issue, idx) => (
+                      <li key={idx}>{issue}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="rounded-xl bg-slate-50 p-4">
+                <h3 className="mb-2 text-sm font-bold text-slate-800">下一餐建议</h3>
+                <div className="space-y-2">
+                  {aiResult.nextMealSuggestions.map((s, idx) => (
+                    <div key={idx} className="rounded-lg bg-white p-3 text-sm shadow-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="font-semibold text-slate-800">{s.food}</span>
+                        <span className="text-xs font-medium text-emerald-600">{s.amount}</span>
+                      </div>
+                      <p className="mt-1 text-xs text-slate-500">{s.reason}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl bg-emerald-50 p-4">
+                <h3 className="mb-1 text-sm font-bold text-emerald-800">鼓励语</h3>
+                <p className="text-sm text-emerald-700">{aiResult.encouragement}</p>
+              </div>
             </div>
           )}
         </section>
