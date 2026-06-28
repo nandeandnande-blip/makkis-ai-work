@@ -70,7 +70,9 @@ function buildPrompt(payload: DietPayload): string {
   if (intake.fat < targets.fat) gaps.push(`脂肪缺口约 ${Math.round(targets.fat - intake.fat)}g`);
   if (intake.calories < targets.calories) gaps.push(`热量缺口约 ${Math.round(targets.calories - intake.calories)} kcal`);
 
-  return `你是一位碳循环饮食教练。请根据用户今天的饮食数据生成分析，并严格以 JSON 对象返回，不要输出 Markdown、代码块或任何 JSON 以外的文本。
+  return `你是一位碳循环饮食教练。请根据用户今天的饮食数据生成分析。
+
+【重要】你必须只返回一个有效的 JSON 对象，不要返回 Markdown、代码块（如 \`\`\`json）、解释文字或任何其他内容。返回内容必须可以被 JSON.parse 直接解析。
 
 返回格式必须匹配以下 JSON Schema：
 ${RESPONSE_SCHEMA}
@@ -106,24 +108,40 @@ ${gaps.length > 0 ? gaps.join('\n') : '暂无'}
 今日食物记录：
 ${mealText || '暂无记录'}
 
-请直接返回 JSON：`;
+只返回 JSON：`;
 }
 
-interface ChatCompletionResponse {
-  choices?: Array<{
-    message?: {
-      role?: string;
-      content?: string;
-    };
-  }>;
+function extractContent(data: unknown): string | null {
+  if (typeof data !== 'object' || data === null) {
+    return null;
+  }
+  const d = data as Record<string, unknown>;
+
+  // 标准 Chat Completions 结构：choices[0].message.content
+  if (Array.isArray(d.choices)) {
+    for (const choice of d.choices) {
+      if (typeof choice !== 'object' || choice === null) continue;
+      const message = (choice as Record<string, unknown>).message;
+      if (typeof message === 'object' && message !== null) {
+        const content = (message as Record<string, unknown>).content;
+        if (typeof content === 'string') return content;
+      }
+    }
+  }
+
+  // 兼容 content 直接挂在 choice 上的情况
+  if (Array.isArray(d.choices)) {
+    const first = d.choices[0];
+    if (typeof first === 'object' && first !== null) {
+      const content = (first as Record<string, unknown>).content;
+      if (typeof content === 'string') return content;
+    }
+  }
+
+  return null;
 }
 
-function extractContent(data: unknown): string {
-  const d = data as ChatCompletionResponse;
-  return d.choices?.[0]?.message?.content?.trim() ?? '';
-}
-
-function cleanJsonContent(content: string): string {
+function stripMarkdownFences(content: string): string {
   return content
     .replace(/^```json\s*/i, '')
     .replace(/^```\s*/i, '')
@@ -131,21 +149,51 @@ function cleanJsonContent(content: string): string {
     .trim();
 }
 
+function extractJsonSubstring(content: string): string | null {
+  const firstBrace = content.indexOf('{');
+  const lastBrace = content.lastIndexOf('}');
+  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+    return content.slice(firstBrace, lastBrace + 1);
+  }
+  return null;
+}
+
 function parseAnalysis(content: string): DietAnalysisResult | null {
+  if (!content.trim()) return null;
+
+  const cleaned = stripMarkdownFences(content);
+
+  // 第一次尝试直接 parse
+  let parsed: unknown;
   try {
-    const cleaned = cleanJsonContent(content);
-    const parsed = JSON.parse(cleaned) as Partial<DietAnalysisResult>;
+    parsed = JSON.parse(cleaned);
+  } catch {
+    // 尝试提取第一个 { 到最后一个 }
+    const jsonSubstring = extractJsonSubstring(cleaned);
+    if (!jsonSubstring) return null;
+    try {
+      parsed = JSON.parse(jsonSubstring);
+    } catch (err) {
+      console.error('[analyze-diet] JSON.parse failed after extraction:', err);
+      console.error('[analyze-diet] attempted content:', jsonSubstring);
+      return null;
+    }
+  }
+
+  try {
+    const result = parsed as Partial<DietAnalysisResult>;
 
     if (
-      typeof parsed.overall !== 'string' ||
-      !Array.isArray(parsed.issues) ||
-      !Array.isArray(parsed.nextMealSuggestions) ||
-      typeof parsed.encouragement !== 'string'
+      typeof result.overall !== 'string' ||
+      !Array.isArray(result.issues) ||
+      !Array.isArray(result.nextMealSuggestions) ||
+      typeof result.encouragement !== 'string'
     ) {
+      console.error('[analyze-diet] parsed JSON missing required fields:', result);
       return null;
     }
 
-    const suggestions = parsed.nextMealSuggestions.filter(
+    const suggestions = result.nextMealSuggestions.filter(
       (s): s is NextMealSuggestion =>
         typeof (s as NextMealSuggestion).food === 'string' &&
         typeof (s as NextMealSuggestion).amount === 'string' &&
@@ -153,13 +201,13 @@ function parseAnalysis(content: string): DietAnalysisResult | null {
     );
 
     return {
-      overall: parsed.overall,
-      issues: parsed.issues.filter((i): i is string => typeof i === 'string'),
+      overall: result.overall,
+      issues: result.issues.filter((i): i is string => typeof i === 'string'),
       nextMealSuggestions: suggestions,
-      encouragement: parsed.encouragement,
+      encouragement: result.encouragement,
     };
   } catch (err) {
-    console.error('[analyze-diet] parse analysis error:', err, 'content:', content);
+    console.error('[analyze-diet] validate parsed JSON error:', err);
     return null;
   }
 }
@@ -194,27 +242,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       body: JSON.stringify({
         model: 'deepseek-v4-flash',
         messages: [{ role: 'user', content: buildPrompt(payload) }],
-        response_format: { type: 'json_object' },
         max_tokens: 800,
         temperature: 0.7,
       }),
     });
 
+    const responseText = await deepseekRes.text();
+    let parsedJson: unknown = null;
+    try {
+      parsedJson = JSON.parse(responseText);
+    } catch {
+      parsedJson = null;
+    }
+
+    console.log('[analyze-diet] DeepSeek status:', deepseekRes.status);
+    console.log('[analyze-diet] DeepSeek response text:', responseText);
+    console.log('[analyze-diet] DeepSeek parsed json:', parsedJson);
+
     if (!deepseekRes.ok) {
-      const errorText = await deepseekRes.text();
-      console.error('[analyze-diet] DeepSeek API error:', deepseekRes.status, errorText);
+      console.error('[analyze-diet] DeepSeek API error:', deepseekRes.status, responseText);
       return res.status(500).json({ error: 'AI服务调用失败，请稍后重试' });
     }
 
-    const data = await deepseekRes.json();
-    const content = extractContent(data);
+    const content = extractContent(parsedJson);
 
-    if (!content) {
-      return res.status(500).json({ error: 'AI 返回结果为空，请稍后重试' });
+    if (content === null || content.trim() === '') {
+      console.error('[analyze-diet] DeepSeek content empty, raw:', parsedJson ?? responseText);
+      return res.status(500).json({
+        error: 'AI返回内容为空',
+        raw: parsedJson ?? responseText,
+      });
     }
 
     const result = parseAnalysis(content);
     if (!result) {
+      console.error('[analyze-diet] parse analysis failed, content:', content);
       return res.status(500).json({ error: 'AI 返回格式异常，请稍后重试' });
     }
 

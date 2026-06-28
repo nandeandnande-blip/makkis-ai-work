@@ -363,7 +363,7 @@ export default function Dashboard() {
       setAiResult(data.result as DietAnalysisResult);
     } catch (err) {
       console.error('[Dashboard] AI analyze error:', err);
-      setAiError('AI分析失败，请稍后重试');
+      setAiError(err instanceof Error ? err.message : 'AI分析失败，请稍后重试');
     } finally {
       setAiLoading(false);
     }
