@@ -173,31 +173,74 @@ export async function getDailyRecord(
   }
 }
 
-/** 获取日期范围内的每日记录（包含 meal_foods），返回 date -> DailyRecord 映射 */
+export interface CalendarDayData {
+  totalCalories: number;
+  totalProtein: number;
+  totalCarbs: number;
+  totalFat: number;
+  meals: Meal[];
+}
+
+/** 获取日期范围内的每日记录（包含 meal_foods），返回 date -> CalendarDayData 映射 */
 export async function getDailyRecordsByDateRange(
   userId: string,
   start: string,
   end: string
-): Promise<Record<string, DailyRecord>> {
+): Promise<Record<string, CalendarDayData>> {
+  console.log('[dailyRecordService] query range:', { userId, start, end });
+
   const { data, error } = await supabase
     .from('daily_records')
-    .select('*, meal_foods(*)')
+    .select('*')
     .eq('user_id', userId)
     .gte('date', start)
     .lte('date', end);
 
-  if (error) {
+  if (error || !data) {
     console.error('[dailyRecordService] getDailyRecordsByDateRange error:', error);
     return {};
   }
 
-  const map: Record<string, DailyRecord> = {};
-  (data as Array<{ meal_foods: MealFoodRow[] } & DailyRecordRow> | null ?? []).forEach((row) => {
-    const { meal_foods, ...recordRow } = row;
-    const record = toDailyRecord(recordRow as DailyRecordRow, meal_foods ?? []);
+  const recordRows = data as DailyRecordRow[];
+  console.log('[dailyRecordService] daily_records count:', recordRows.length, recordRows.map((r) => r.date));
+
+  if (recordRows.length === 0) return {};
+
+  // 逐条查询 meal_foods：与 Dashboard 的 fetchMealFoods 保持一致，避免 RLS 对 .in 查询的限制
+  const records = await Promise.all(
+    recordRows.map(async (row) => {
+      const mealFoodRows = await fetchMealFoods(row.id);
+      return toDailyRecord(row, mealFoodRows);
+    })
+  );
+
+  const map: Record<string, CalendarDayData> = {};
+  records.forEach((record) => {
+    const allFoods = record.meals.flatMap((m) => m.foods);
+    const totals = allFoods.reduce(
+      (acc, f) => ({
+        calories: acc.calories + f.calories,
+        protein: acc.protein + f.protein,
+        carbs: acc.carbs + f.carbs,
+        fat: acc.fat + f.fat,
+      }),
+      { calories: 0, protein: 0, carbs: 0, fat: 0 }
+    );
+
+    const dayData: CalendarDayData = {
+      totalCalories: Math.round(totals.calories),
+      totalProtein: Math.round(totals.protein),
+      totalCarbs: Math.round(totals.carbs),
+      totalFat: Math.round(totals.fat),
+      meals: record.meals,
+    };
+
     setCachedRecord(userId, record.date, record);
-    map[record.date] = record;
+    map[record.date] = dayData;
   });
+
+  console.log('[dailyRecordService] meal_foods total count:', records.reduce((sum, r) => sum + r.meals.flatMap((m) => m.foods).length, 0));
+  console.log('[dailyRecordService] final calendarData:', map);
 
   return map;
 }
